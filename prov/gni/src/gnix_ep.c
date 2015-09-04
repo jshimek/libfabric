@@ -48,6 +48,7 @@
 #include "gnix_msg.h"
 #include "gnix_rma.h"
 #include "gnix_cntr.h"
+#include "gnix_atomic.h"
 
 
 /*******************************************************************************
@@ -506,6 +507,117 @@ static ssize_t gnix_ep_rma_injectdata(struct fid_ep *ep, const void *buf,
 			 (uint64_t)buf, len, NULL,
 			 dest_addr, addr, key,
 			 NULL, flags, data);
+}
+/*******************************************************************************
+ * EP Atomic API function implementations.
+ ******************************************************************************/
+static ssize_t gnix_ep_atomic_write(struct fid_ep *ep,
+			const void *buf, size_t count, void *desc,
+			fi_addr_t dest_addr,
+			uint64_t addr, uint64_t key,
+			enum fi_datatype datatype, enum fi_op op, void *context)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_writev(struct fid_ep *ep,
+			const struct fi_ioc *iov, void **desc, size_t count,
+			fi_addr_t dest_addr,
+			uint64_t addr, uint64_t key,
+			enum fi_datatype datatype, enum fi_op op, void *context)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_writemsg(struct fid_ep *ep,
+			const struct fi_msg_atomic *msg, uint64_t flags)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_inject(struct fid_ep *ep,
+			const void *buf, size_t count,
+			fi_addr_t dest_addr, uint64_t addr, uint64_t key,
+			enum fi_datatype datatype, enum fi_op op)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_readwrite(struct fid_ep *ep,
+			const void *buf, size_t count, void *desc,
+			void *result, void *result_desc,
+			fi_addr_t dest_addr,
+			uint64_t addr, uint64_t key,
+			enum fi_datatype datatype, enum fi_op op, void *context)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_readwritev(struct fid_ep *ep,
+			const struct fi_ioc *iov, void **desc, size_t count,
+			struct fi_ioc *resultv, void **result_desc,
+			size_t result_count, fi_addr_t dest_addr,
+			uint64_t addr, uint64_t key,
+			enum fi_datatype datatype, enum fi_op op, void *contect)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_readwritemsg(struct fid_ep *ep,
+			const struct fi_msg_atomic *msg,
+			struct fi_ioc *resultv, void **result_desc,
+			size_t result_count, uint64_t flags)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_compwrite(struct fid_ep *ep,
+			const void *buf, size_t count, void *desc,
+			const void *compare, void *compare_desc,
+			void *result, void *result_desc,
+			fi_addr_t dest_addr,
+			uint64_t addr, uint64_t key,
+			enum fi_datatype datatype, enum fi_op op, void *context)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_compwritev(struct fid_ep *ep,
+			const struct fi_ioc *iov, void **desc, size_t count,
+			const struct fi_ioc *comparev, void **compare_desc,
+			size_t compare_count, struct fi_ioc *resultv,
+			void **result_desc, size_t result_count,
+			fi_addr_t dest_addr, uint64_t addr, uint64_t key,
+			enum fi_datatype datatype, enum fi_op op, void *context)
+{
+	return 0;
+}
+
+static ssize_t gnix_ep_atomic_compwritemsg(struct fid_ep *ep,
+			const struct fi_msg_atomic *msg,
+			const struct fi_ioc *comparev, void **compare_desc,
+			size_t compare_count, struct fi_ioc *resultv,
+			void **result_desc, size_t result_count, uint64_t flags)
+{
+	return 0;
+}
+
+int gnix_ep_atomic_writevalid(struct fid_ep *ep,
+			enum fi_datatype datatype, enum fi_op op, size_t *count)
+{
+	return 0;
+}
+
+int gnix_ep_atomic_readwritevalid(struct fid_ep *ep,
+			enum fi_datatype datatype, enum fi_op op, size_t *count)
+{
+	return 0;
+}
+
+int gnix_ep_atomic_compwrite_valid(struct fid_ep *ep,
+			enum fi_datatype datatype, enum fi_op op, size_t *count)
+{
+	return 0;
 }
 
 /*******************************************************************************
@@ -1346,4 +1458,21 @@ struct fi_ops_tagged gnix_ep_tagged_ops = {
 	.senddata = fi_no_tagged_senddata,
 	.senddata = gnix_ep_tsenddata,
 	.injectdata = fi_no_tagged_injectdata,
+};
+
+struct fi_ops_atomic gnix_ep_atomic_ops = {
+	.size = sizeof(struct fi_ops_atomic),
+	.write = gnix_ep_atomic_write,
+	.writev = gnix_ep_atomic_writev,
+	.writemsg = gnix_ep_atomic_writemsg,
+	.inject = gnix_ep_atomic_inject,
+	.readwrite = gnix_ep_atomic_readwrite,
+	.readwritev = gnix_ep_atomic_readwritev,
+	.readwritemsg = gnix_ep_atomic_readwritemsg,
+	.compwrite = gnix_ep_atomic_compwrite,
+	.compwritev = gnix_ep_atomic_compwritev,
+	.compwritemsg = gnix_ep_atomic_compwritemsg,
+	.writevalid = gnix_ep_atomic_writevalid,
+	.readwritevalid = gnix_ep_atomic_readwritevalid,
+	.compwritevalid = gnix_ep_atomic_compwrite_valid,
 };

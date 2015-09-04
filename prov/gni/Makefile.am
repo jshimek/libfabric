@@ -13,6 +13,7 @@ _gni_files = \
 	prov/gni/common/rbtree.c \
 	prov/gni/fasthash/fasthash.c \
 	prov/gni/src/gnix_av.c \
+	prov/gni/src/gnix_atomic.c \
 	prov/gni/src/gnix_bitmap.c \
 	prov/gni/src/gnix_cm.c \
 	prov/gni/src/gnix_cm_nic.c \
