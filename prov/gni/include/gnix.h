@@ -393,7 +393,9 @@ enum gnix_fab_req_type {
 	GNIX_FAB_RQ_RDMA_WRITE,
 	GNIX_FAB_RQ_RDMA_READ,
 	GNIX_FAB_RQ_RECV,
-	GNIX_FAB_RQ_TRECV
+	GNIX_FAB_RQ_TRECV,
+	GNIX_FAB_RQ_ATOMIC,
+	GNIX_FAB_RQ_ATOMICF
 };
 
 struct gnix_fab_req_rma {
@@ -422,6 +424,11 @@ struct gnix_fab_req_msg {
 	uint64_t                     rma_id;
 };
 
+struct gnix_fab_req_atm {
+	uint64_t rem_addr;
+	uint64_t rem_mr_key;
+	uint64_t amo_cmd;
+};
 /*
  * Fabric request layout, there is a one to one
  * correspondence between an application's invocation of fi_send, fi_recv
@@ -447,6 +454,7 @@ struct gnix_fab_req {
 	union {
 		struct gnix_fab_req_rma rma;
 		struct gnix_fab_req_msg msg;
+		struct gnix_fab_req_atm atm;
 	};
 	char inject_buf[GNIX_INJECT_SIZE];
 };

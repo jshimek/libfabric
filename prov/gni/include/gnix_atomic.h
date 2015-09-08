@@ -34,9 +34,12 @@
 #ifndef _GNIX_ATOMIC_H_
 #define _GNIX_ATOMIC_H_
 
-ssize_t _gnix_atomic(struct gnix_fid_ep *ep, enum gnix_fab_req_type fr_type,
-		     uint64_t loc_addr, size_t len, void *mdesc,
-		     uint64_t dest_addr, uint64_t rem_addr, uint64_t mkey,
-		     void *context, uint64_t flags, uint64_t data);
-
+ssize_t _gnix_atomic(struct gnix_fid_ep *ep, const void *buf,
+		const struct fi_ioc *iov, const struct fi_ioc *comparev,
+		struct fi_ioc *resultv, size_t count, size_t compare_count,
+		size_t result_count, uint64_t addr, uint64_t key,
+		enum fi_datatype datatype, enum fi_op op, const void *compare,
+		void *result, void *desc, void *compare_desc,
+		void *result_desc, fi_addr_t dest_addr,
+		const struct fi_atomic_msg *msg, uint64_t flags, void *context);
 #endif /* _GNIX_ATOMIC_H_ */

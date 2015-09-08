@@ -85,6 +85,7 @@ static struct fi_ops gnix_ep_fi_ops;
 static struct fi_ops_ep gnix_ep_ops;
 static struct fi_ops_msg gnix_ep_msg_ops;
 static struct fi_ops_rma gnix_ep_rma_ops;
+struct fi_ops_atomic gnix_ep_atomic_ops;
 struct fi_ops_tagged gnix_ep_tagged_ops;
 
 /*******************************************************************************
@@ -517,6 +518,14 @@ static ssize_t gnix_ep_atomic_write(struct fid_ep *ep,
 			uint64_t addr, uint64_t key,
 			enum fi_datatype datatype, enum fi_op op, void *context)
 {
+	struct gnix_fid_ep *gnix_ep;
+
+	if (!ep)
+		return -FI_EINVAL;
+
+
+	gnix_ep = container_of(ep, struct gnix_fid_ep, ep_fid);
+	assert((gnix_ep->type == FI_EP_RDM || (gnix_ep->type == FI_EP_MSG)));
 	return 0;
 }
 
@@ -1474,5 +1483,5 @@ struct fi_ops_atomic gnix_ep_atomic_ops = {
 	.compwritemsg = gnix_ep_atomic_compwritemsg,
 	.writevalid = gnix_ep_atomic_writevalid,
 	.readwritevalid = gnix_ep_atomic_readwritevalid,
-	.compwritevalid = gnix_ep_atomic_compwrite_valid,
+	.compwritevalid = gnix_ep_atomic_compwrite_valid
 };
