@@ -425,9 +425,13 @@ struct gnix_fab_req_msg {
 };
 
 struct gnix_fab_req_atm {
+	uint64_t loc_addr;
+	struct gnix_fid_mem_desc *loc_md;
+	uint64_t len;
 	uint64_t rem_addr;
 	uint64_t rem_mr_key;
 	uint64_t amo_cmd;
+	uint64_t imm;
 };
 /*
  * Fabric request layout, there is a one to one

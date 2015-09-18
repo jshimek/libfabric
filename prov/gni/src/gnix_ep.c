@@ -614,19 +614,19 @@ static ssize_t gnix_ep_atomic_compwritemsg(struct fid_ep *ep,
 int gnix_ep_atomic_writevalid(struct fid_ep *ep,
 			enum fi_datatype datatype, enum fi_op op, size_t *count)
 {
-	return 0;
+	return __gnix_atomic_writevalid(ep, datatype, op, count);
 }
 
 int gnix_ep_atomic_readwritevalid(struct fid_ep *ep,
 			enum fi_datatype datatype, enum fi_op op, size_t *count)
 {
-	return 0;
+	return __gnix_atomic_readwritevalid(ep, datatype, op, count);
 }
 
 int gnix_ep_atomic_compwrite_valid(struct fid_ep *ep,
 			enum fi_datatype datatype, enum fi_op op, size_t *count)
 {
-	return 0;
+	return __gnix_atomic_compwritevalid(ep, datatype, op, count);
 }
 
 /*******************************************************************************

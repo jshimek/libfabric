@@ -48,6 +48,7 @@
 
 static int __gnix_atomic_fab_req_complete(void *arg)
 {
+	struct gnix_tx_descriptor *txd = (struct gnix_tx_descriptor *)arg;
 	struct gnix_fab_req *req = (struct gnix_fab_req *) arg;
 	struct gnix_fid_ep *ep = req->gnix_ep;
 	int rc;
@@ -57,9 +58,9 @@ static int __gnix_atomic_fab_req_complete(void *arg)
 
 	if (req->flags & FI_COMPLETION) {
 		rc = _gnix_cq_add_event(ep->send_cq, req->user_context,
-					req->flags, req->len,
-					(void *)req->loc_addr,
-					req->imm, req->msg.tag);
+					req->flags, req->atm.len,
+					(void *)req->atm.loc_addr,
+					req->atm.imm, req->msg.tag);
 		if (rc) {
 			GNIX_WARN(FI_LOG_CQ,
 				  "_gnix_cq_add_event() failed: %d\n", rc);
@@ -82,16 +83,47 @@ static int __gnix_atomic_fab_req_complete(void *arg)
 	}
 
 	atomic_dec(&req->vc->outstanding_tx_reqs);
-
+	_gnix_nic_tx_free(ep->nic, txd);
 
 	/* We could have requests waiting for TXDs or FI_FENCE operations.
 	 * Schedule this VC to push any such TXs. */
-	_gnix_vc_schedule_tx(req->vc);
+	_gnix_vc_schedule_reqs(req->vc);
 
 	_gnix_fr_free(ep, req);
 
 	return FI_SUCCESS;
 }
+
+static gni_fma_cmd_type_t __gnix_translate_op(enum fi_op op)
+{
+	switch (op) {
+	case FI_MIN:
+		return GNI_FMA_ATOMIC2_IMIN;
+	case FI_MAX:
+		return GNI_FMA_ATOMIC2_IMAX;
+	case FI_SUM:
+		return GNI_FMA_ATOMIC_ADD;
+	case FI_PROD:
+	case FI_LOR:
+	case FI_LAND:
+	case FI_BOR:
+	case FI_BAND:
+	case FI_LXOR:
+	case FI_BXOR:
+	case FI_ATOMIC_READ:
+	case FI_ATOMIC_WRITE:
+	case FI_CSWAP:
+	case FI_CSWAP_NE:
+	case FI_CSWAP_LE:
+	case FI_CSWAP_LT:
+	case FI_CSWAP_GE:
+	case FI_CSWAP_GT:
+	case FI_MSWAP:
+	default:
+		return 0;
+	}
+}
+
 
 static int __gnix_atomic_txd_complete(void *arg)
 {
@@ -118,6 +150,7 @@ int _gnix_atomic_post_req(void *data)
 		GNIX_INFO(FI_LOG_EP_DATA, "_gnix_nic_tx_alloc() failed: %d\n",
 			 rc);
 		return -FI_EAGAIN;
+	}
 
 	txd->completer_fn = __gnix_atomic_txd_complete;
 	txd->req = fab_req;
@@ -126,19 +159,19 @@ int _gnix_atomic_post_req(void *data)
 		(gnix_mr_key_t *) &fab_req->atm.rem_mr_key,
 		&mdh);
 
-	loc_md = (struct gnix_fid_mem_desc *)fab_req->loc_md;
+	loc_md = (struct gnix_fid_mem_desc *)fab_req->atm.loc_md;
 
 	txd->gni_desc.type = GNI_POST_AMO;
 	txd->gni_desc.cq_mode = GNI_CQMODE_GLOBAL_EVENT | /* Check Flags */
 				GNI_CQMODE_REMOTE_EVENT;
 	txd->gni_desc.dlvr_mode = GNI_DLVMODE_PERFORMANCE;
-	txd->gni_desc.local_addr = (uint64_t)fab_req->loc_addr;
+	txd->gni_desc.local_addr = (uint64_t)fab_req->atm.loc_addr;
 	if (loc_md)
 		txd->gni_desc.local_mem_hndl = loc_md->mem_hndl;
 
 	txd->gni_desc.remote_addr = (uint64_t)fab_req->atm.rem_addr;
 	txd->gni_desc.remote_mem_hndl = mdh;
-	txd->gni_desc.length = fab_req->len;
+	txd->gni_desc.length = fab_req->atm.len;
 	txd->gni_desc.src_cq_hndl = nic->tx_cq;
 	txd->gni_desc.amo_cmd = fab_req->atm.amo_cmd;
 	{
@@ -167,6 +200,7 @@ int _gnix_atomic_post_req(void *data)
 
 	return gnixu_to_fi_errno(status);
 }
+
 ssize_t _gnix_atomic(struct gnix_fid_ep *ep, const void *buf,
 		const struct fi_ioc *iov, const struct fi_ioc *comparev,
 		struct fi_ioc *resultv, size_t count, size_t compare_count,
@@ -180,15 +214,83 @@ ssize_t _gnix_atomic(struct gnix_fid_ep *ep, const void *buf,
 		return -FI_EINVAL;
 	return -FI_EINVAL;
 }
-/*
-ssize_t _gnix_atomic(struct gnix_fid_ep *ep,
-			const struct fi_msg_atomic *msg,
-			const struct fi_ioc *comparev, void ** compare_desc,
-			size_t compare_count, struct fi_ioc *resultv,
-			void **result_desc, size_t result_count, uint64_t flags)
-{
 
-	struct gnix_vc *vc;
-	struct gnix_fab_req *req;
-	struct
-*/
+int __gnix_atomic_writevalid(struct fid_ep *ep,
+			    enum fi_datatype datatype,
+			    enum fi_op op, size_t *count)
+{
+	int chunk_size;
+
+	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+		return -FI_EOPNOTSUPP;
+
+	switch (op) {
+	case FI_MIN:
+	case FI_MAX:
+	case FI_SUM:
+	case FI_PROD:
+	case FI_LOR:
+	case FI_LAND:
+	case FI_BOR:
+	case FI_BAND:
+	case FI_LXOR:
+	case FI_BXOR:
+	case FI_ATOMIC_WRITE:
+	default:
+		return -FI_EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+int __gnix_atomic_readwritevalid(struct fid_ep *ep,
+				enum fi_datatype datatype,
+				enum fi_op op, size_t *count)
+{
+	int chunk_size;
+
+	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+		return -FI_EOPNOTSUPP;
+
+	switch (op) {
+	case FI_MIN:
+	case FI_MAX:
+	case FI_SUM:
+	case FI_PROD:
+	case FI_LOR:
+	case FI_LAND:
+	case FI_BOR:
+	case FI_BAND:
+	case FI_LXOR:
+	case FI_BXOR:
+	case FI_ATOMIC_READ:
+	case FI_ATOMIC_WRITE:
+	default:
+		return -FI_EOPNOTSUPP;
+	}
+	return 0;
+}
+
+int __gnix_atomic_compwritevalid(struct fid_ep *ep,
+				      enum fi_datatype datatype,
+				      enum fi_op op, size_t *count)
+{
+	int chunk_size;
+
+	if (datatype < 0 || datatype >= FI_DATATYPE_LAST)
+		return -FI_EOPNOTSUPP;
+
+	switch (op) {
+	case FI_CSWAP:
+	case FI_CSWAP_NE:
+	case FI_CSWAP_LE:
+	case FI_CSWAP_LT:
+	case FI_CSWAP_GE:
+	case FI_CSWAP_GT:
+	case FI_MSWAP:
+		return -FI_EOPNOTSUPP;
+	default:
+		return -FI_EOPNOTSUPP;
+	}
+	return 0;
+}

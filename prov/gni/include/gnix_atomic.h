@@ -42,4 +42,13 @@ ssize_t _gnix_atomic(struct gnix_fid_ep *ep, const void *buf,
 		void *result, void *desc, void *compare_desc,
 		void *result_desc, fi_addr_t dest_addr,
 		const struct fi_atomic_msg *msg, uint64_t flags, void *context);
+
+int __gnix_atomic_writevalid(struct fid_ep *ep,
+		enum fi_datatype datatype, enum fi_op op, size_t *count);
+
+int __gnix_atomic_readwritevalid(struct fid_ep *ep,
+		enum fi_datatype datatype, enum fi_op op, size_t *count);
+
+int __gnix_atomic_compwritevalid(struct fid_ep *ep,
+		enum fi_datatype datatype, enum fi_op op, size_t *count);
 #endif /* _GNIX_ATOMIC_H_ */
