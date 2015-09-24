@@ -111,7 +111,9 @@ static gni_fma_cmd_type_t __gnix_translate_op(enum fi_op op)
 	case FI_LXOR:
 	case FI_BXOR:
 	case FI_ATOMIC_READ:
+		return GNI_FMA_ATOMIC2_ADD;
 	case FI_ATOMIC_WRITE:
+		return GNI_FMA_ATOMIC2_SWAP;
 	case FI_CSWAP:
 	case FI_CSWAP_NE:
 	case FI_CSWAP_LE:
