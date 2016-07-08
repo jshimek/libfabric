@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014 Intel Corporation, Inc.  All rights reserved.
+ * Copyright (c) 2016 Cisco Systems, Inc.  All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -125,7 +126,7 @@ static inline void sock_pe_discard_field(struct sock_pe_entry *pe_entry)
 {
 	size_t ret;
 	if (!pe_entry->rem)
-		return;
+		goto out;
 
 	SOCK_LOG_DBG("Remaining for %p: %ld\n", pe_entry, pe_entry->rem);
 	ret = sock_comm_discard(pe_entry, pe_entry->rem);
@@ -135,6 +136,7 @@ static inline void sock_pe_discard_field(struct sock_pe_entry *pe_entry)
 	if (pe_entry->rem == 0)
 		pe_entry->conn->rx_pe_entry = NULL;
 
+ out:
 	if (pe_entry->done_len == pe_entry->total_len && !pe_entry->rem) {
 		SOCK_LOG_DBG("Discard complete for %p\n", pe_entry);
 		pe_entry->is_complete = 1;
@@ -346,13 +348,13 @@ static void sock_pe_report_read_completion(struct sock_pe_entry *pe_entry)
 		sock_cntr_inc(pe_entry->comp->read_cntr);
 }
 
-static void sock_pe_report_rx_error(struct sock_pe_entry *pe_entry, int rem)
+static void sock_pe_report_rx_error(struct sock_pe_entry *pe_entry, int rem, int err)
 {
 	if (pe_entry->comp->recv_cntr)
 		sock_cntr_err_inc(pe_entry->comp->recv_cntr);
 	if (pe_entry->comp->recv_cq)
 		sock_cq_report_error(pe_entry->comp->recv_cq, pe_entry, rem,
-				     FI_ETRUNC, -FI_ETRUNC, NULL);
+				     err, -err, NULL);
 }
 
 static void sock_pe_report_tx_rma_read_err(struct sock_pe_entry *pe_entry,
@@ -750,7 +752,7 @@ static int sock_pe_process_rx_write(struct sock_pe *pe,
 
 	/* report error, if any */
 	if (rem) {
-		sock_pe_report_rx_error(pe_entry, rem);
+		sock_pe_report_rx_error(pe_entry, rem, FI_ETRUNC);
 		goto out;
 	}
 
@@ -1356,7 +1358,7 @@ ssize_t sock_rx_claim_recv(struct sock_rx_ctx *rx_ctx, void *context,
 
 		if (rem) {
 			SOCK_LOG_DBG("Not enough space in posted recv buffer\n");
-			sock_pe_report_rx_error(&pe_entry, rem);
+			sock_pe_report_rx_error(&pe_entry, rem, FI_ETRUNC);
 		} else {
 			sock_pe_report_recv_completion(&pe_entry);
 		}
@@ -1450,7 +1452,7 @@ static int sock_pe_progress_buffered_rx(struct sock_rx_ctx *rx_ctx)
 
 		if (rem) {
 			SOCK_LOG_DBG("Not enough space in posted recv buffer\n");
-			sock_pe_report_rx_error(&pe_entry, rem);
+			sock_pe_report_rx_error(&pe_entry, rem, FI_ETRUNC);
 		} else {
 			sock_pe_report_recv_completion(&pe_entry);
 		}
@@ -1588,7 +1590,7 @@ static int sock_pe_process_rx_send(struct sock_pe *pe,
 	/* report error, if any */
 	if (rem) {
 		SOCK_LOG_ERROR("Not enough space in posted recv buffer\n");
-		sock_pe_report_rx_error(pe_entry, rem);
+		sock_pe_report_rx_error(pe_entry, rem, FI_ETRUNC);
 		pe_entry->is_error = 1;
 		pe_entry->rem = pe_entry->total_len - pe_entry->done_len;
 		goto out;
@@ -2151,6 +2153,15 @@ static int sock_pe_progress_rx_pe_entry(struct sock_pe *pe,
 	int ret;
 
 	if (sock_comm_is_disconnected(pe_entry)) {
+		SOCK_LOG_DBG("conn disconnected: removing fd from pollset\n");
+		sock_epoll_del(&pe_entry->ep_attr->cmap.epoll_set,
+			       pe_entry->conn->sock_fd);
+		sock_pe_poll_del(pe, pe_entry->conn->sock_fd);
+		ofi_close_socket(pe_entry->conn->sock_fd);
+
+		if (pe_entry->pe.rx.header_read)
+			sock_pe_report_rx_error(pe_entry, 0, FI_EIO);
+
 		sock_pe_release_entry(pe, pe_entry);
 		return 0;
 	}
@@ -2416,6 +2427,15 @@ void sock_pe_poll_add(struct sock_pe *pe, int fd)
         fastlock_release(&pe->signal_lock);
 }
 
+void sock_pe_poll_del(struct sock_pe *pe, int fd)
+{
+        fastlock_acquire(&pe->signal_lock);
+        if (sock_epoll_del(&pe->epoll_set, fd))
+                SOCK_LOG_DBG("failed to del from epoll set: %d, size: %d, used: %d\n",
+			       fd, pe->epoll_set.size, pe->epoll_set.used);
+        fastlock_release(&pe->signal_lock);
+}
+
 void sock_pe_add_tx_ctx(struct sock_pe *pe, struct sock_tx_ctx *ctx)
 {
 	struct dlist_entry *entry;
@@ -2618,21 +2638,18 @@ out:
 	return ret;
 }
 
-static void sock_pe_poll(struct sock_pe *pe)
+static int sock_pe_wait_ok(struct sock_pe *pe)
 {
-	char tmp;
-	int ret;
 	struct dlist_entry *entry;
 	struct sock_tx_ctx *tx_ctx;
 	struct sock_rx_ctx *rx_ctx;
 
 	if (pe->waittime && ((fi_gettime_ms() - pe->waittime) < sock_pe_waittime))
-		return;
+		return 0;
 
 	if (dlist_empty(&pe->tx_list) && dlist_empty(&pe->rx_list))
-		return;
+		return 0;
 
-	pthread_mutex_lock(&pe->list_lock);
 	if (!dlist_empty(&pe->tx_list)) {
 		for (entry = pe->tx_list.next;
 		     entry != &pe->tx_list; entry = entry->next) {
@@ -2640,8 +2657,7 @@ static void sock_pe_poll(struct sock_pe *pe)
 						pe_entry);
 			if (!rbempty(&tx_ctx->rb) ||
 			    !dlist_empty(&tx_ctx->pe_entry_list)) {
-				pthread_mutex_unlock(&pe->list_lock);
-				return;
+				return 0;
 			}
 		}
 	}
@@ -2653,12 +2669,18 @@ static void sock_pe_poll(struct sock_pe *pe)
 						pe_entry);
 			if (!dlist_empty(&rx_ctx->rx_buffered_list) ||
 			    !dlist_empty(&rx_ctx->pe_entry_list)) {
-				pthread_mutex_unlock(&pe->list_lock);
-				return;
+				return 0;
 			}
 		}
 	}
-	pthread_mutex_unlock(&pe->list_lock);
+
+	return 1;
+}
+
+static void sock_pe_wait(struct sock_pe *pe)
+{
+	char tmp;
+	int ret;
 
 	ret = sock_epoll_wait(&pe->epoll_set, -1);
         if (ret < 0)
@@ -2743,10 +2765,14 @@ static void *sock_pe_progress_thread(void *data)
 	SOCK_LOG_DBG("Progress thread started\n");
 	sock_pe_set_affinity();
 	while (*((volatile int *)&pe->do_progress)) {
-		if (pe->domain->progress_mode == FI_PROGRESS_AUTO)
-			sock_pe_poll(pe);
-
 		pthread_mutex_lock(&pe->list_lock);
+		if (pe->domain->progress_mode == FI_PROGRESS_AUTO &&
+		    sock_pe_wait_ok(pe)) {
+			pthread_mutex_unlock(&pe->list_lock);
+			sock_pe_wait(pe);
+			pthread_mutex_lock(&pe->list_lock);
+		}
+
 		if (!dlist_empty(&pe->tx_list)) {
 			for (entry = pe->tx_list.next;
 			     entry != &pe->tx_list; entry = entry->next) {

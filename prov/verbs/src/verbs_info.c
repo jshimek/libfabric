@@ -306,7 +306,8 @@ int fi_ibv_check_ep_attr(const struct fi_ep_attr *attr,
 		return -FI_ENODATA;
 	}
 
-	if (attr->rx_ctx_cnt > info->domain_attr->max_ep_rx_ctx) {
+	if ((attr->rx_ctx_cnt > info->domain_attr->max_ep_rx_ctx) &&
+			(attr->rx_ctx_cnt != FI_SHARED_CONTEXT)) {
 		FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
 			"rx_ctx_cnt exceeds supported size\n");
 		return -FI_ENODATA;
@@ -803,7 +804,7 @@ int fi_ibv_init_info(void)
 {
 	struct ibv_context **ctx_list;
 	struct fi_info *fi = NULL, *tail = NULL;
-	int ret = 0, i, num_devices;
+	int ret = 0, i, num_devices, fork_unsafe = 0;
 
 	if (verbs_info)
 		return 0;
@@ -816,6 +817,21 @@ int fi_ibv_init_info(void)
 		VERBS_INFO(FI_LOG_FABRIC, "No RDMA devices found\n");
 		ret = -FI_ENODATA;
 		goto unlock;
+	}
+
+	fi_param_get_bool(NULL, "fork_unsafe", &fork_unsafe);
+
+	if (!fork_unsafe) {
+		FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "Enabling IB fork support\n");
+		ret = ibv_fork_init();
+		if (ret) {
+			FI_WARN(&fi_ibv_prov, FI_LOG_CORE,
+					"Enabling IB fork support failed: %s (%d)\n",
+					strerror(ret), ret);
+			goto unlock;
+		}
+	} else {
+		FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "Not enabling IB fork support\n");
 	}
 
 	ctx_list = rdma_get_devices(&num_devices);

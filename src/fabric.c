@@ -349,6 +349,11 @@ void fi_ini(void)
 
 	fi_param_define(NULL, "provider", FI_PARAM_STRING,
 			"Only use specified provider (default: all available)");
+	fi_param_define(NULL, "fork_unsafe", FI_PARAM_BOOL,
+			"Whether use of fork() may be unsafe for some providers"
+			" (default: no). Setting this to yes could improve"
+			" performance at the expense of making fork() potentially"
+			" unsafe");
 	fi_param_get_str(NULL, "provider", &param_val);
 	fi_create_filter(&prov_filter, param_val);
 
@@ -508,7 +513,7 @@ int DEFAULT_SYMVER_PRE(fi_getinfo)(uint32_t version, const char *node, const cha
 {
 	struct fi_prov *prov;
 	struct fi_info *tail, *cur;
-	int ret = -FI_ENODATA;
+	int ret;
 
 	if (!init)
 		fi_ini();
@@ -561,7 +566,7 @@ int DEFAULT_SYMVER_PRE(fi_getinfo)(uint32_t version, const char *node, const cha
 		tail->fabric_attr->prov_version = prov->provider->version;
 	}
 
-	return *info ? 0 : ret;
+	return *info ? 0 : -FI_ENODATA;
 }
 DEFAULT_SYMVER(fi_getinfo_, fi_getinfo);
 
