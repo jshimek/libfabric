@@ -33,59 +33,56 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <fi_util.h>
+#include "rxd.h"
 
-#include "rxm.h"
-
-static struct fi_ops_fabric rxm_fabric_ops = {
+static struct fi_ops_fabric rxd_fabric_ops = {
 	.size = sizeof(struct fi_ops_fabric),
-	.domain = rxm_domain_open,
+	.domain = &rxd_domain_open,
 	.passive_ep = fi_no_passive_ep,
 	.eq_open = ofi_eq_create,
 	.wait_open = ofi_wait_fd_open,
 	.trywait = ofi_trywait
 };
 
-static int rxm_fabric_close(fid_t fid)
+static int rxd_fabric_close(fid_t fid)
 {
 	int ret;
-	struct rxm_fabric *rxm_fabric;
+	struct rxd_fabric *rxd_fabric;
 
-	rxm_fabric = container_of(fid, struct rxm_fabric, util_fabric.fabric_fid.fid);
-
-	ret = fi_close(&rxm_fabric->msg_fabric->fid);
+	rxd_fabric = container_of(fid, struct rxd_fabric, util_fabric.fabric_fid.fid);
+	ret = fi_close(&rxd_fabric->dg_fabric->fid);
 	if (ret)
 		return ret;
 
-	ret = ofi_fabric_close(&rxm_fabric->util_fabric);
+	ret = ofi_fabric_close(&rxd_fabric->util_fabric);
 	if (ret)
 		return ret;
 
-	free(rxm_fabric);
+	free(rxd_fabric);
 	return 0;
 }
 
-static struct fi_ops rxm_fabric_fi_ops = {
+static struct fi_ops rxd_fabric_fi_ops = {
 	.size = sizeof(struct fi_ops),
-	.close = rxm_fabric_close,
+	.close = rxd_fabric_close,
 	.bind = fi_no_bind,
 	.control = fi_no_control,
 	.ops_open = fi_no_ops_open,
 };
 
-int rxm_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
+int rxd_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 		void *context)
 {
-	struct rxm_fabric *rxm_fabric;
-	struct fi_info hints, *msg_info;
+	struct rxd_fabric *rxd_fabric;
+	struct fi_info hints, *dg_info;
 	int ret;
 
-	rxm_fabric = calloc(1, sizeof(*rxm_fabric));
-	if (!rxm_fabric)
+	rxd_fabric = calloc(1, sizeof(*rxd_fabric));
+	if (!rxd_fabric)
 		return -FI_ENOMEM;
 
-	ret = ofi_fabric_init(&rxm_prov, &rxm_fabric_attr, attr,
-			     &rxm_fabric->util_fabric, context, FI_MATCH_PREFIX);
+	ret = ofi_fabric_init(&rxd_prov, &rxd_fabric_attr, attr,
+			     &rxd_fabric->util_fabric, context, FI_MATCH_PREFIX);
 	if (ret)
 		goto err1;
 
@@ -96,33 +93,33 @@ int rxm_fabric(struct fi_fabric_attr *attr, struct fid_fabric **fabric,
 	}
 	hints.fabric_attr->name = attr->name;
 
-	ret = ofix_getinfo(rxm_prov.version, NULL, NULL, 0, &rxm_util_prov,
-			&hints, rxm_alter_layer_info,
-			rxm_alter_base_info, 1, &msg_info);
+	ret = ofix_getinfo(rxd_prov.version, NULL, NULL, 0, &rxd_util_prov,
+			&hints, rxd_alter_layer_info,
+			rxd_alter_base_info, 1, &dg_info);
 	if (ret) {
 		ret = -FI_EINVAL;
 		goto err3;
 	}
 
-	ret = fi_fabric(msg_info->fabric_attr, &rxm_fabric->msg_fabric, context);
+	ret = fi_fabric(dg_info->fabric_attr, &rxd_fabric->dg_fabric, context);
 	if (ret) {
 		goto err4;
 	}
 
-	*fabric = &rxm_fabric->util_fabric.fabric_fid;
-	(*fabric)->fid.ops = &rxm_fabric_fi_ops;
-	(*fabric)->ops = &rxm_fabric_ops;
+	*fabric = &rxd_fabric->util_fabric.fabric_fid;
+	(*fabric)->fid.ops = &rxd_fabric_fi_ops;
+	(*fabric)->ops = &rxd_fabric_ops;
 
 	free(hints.fabric_attr);
-	fi_freeinfo(msg_info);
+	fi_freeinfo(dg_info);
 	return 0;
 err4:
-	fi_freeinfo(msg_info);
+	fi_freeinfo(dg_info);
 err3:
 	free(hints.fabric_attr);
 err2:
-	ofi_fabric_close(&rxm_fabric->util_fabric);
+	ofi_fabric_close(&rxd_fabric->util_fabric);
 err1:
-	free(rxm_fabric);
+	free(rxd_fabric);
 	return ret;
 }

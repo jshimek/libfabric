@@ -195,7 +195,7 @@ struct sock_fabric {
 
 struct sock_conn {
         int sock_fd;
-        int disconnected;
+        int connected;
 	int address_published;
         struct sockaddr_in addr;
         struct sock_pe_entry *rx_pe_entry;
@@ -536,7 +536,6 @@ struct sock_ep_attr {
 	int is_enabled;
 	struct sock_cm_entry cm;
 	struct sock_conn_listener listener;
-	struct dlist_entry conn_list;
 	fastlock_t lock;
 
 	struct index_map conn_idm;
@@ -956,7 +955,6 @@ int sock_msg_verify_ep_attr(struct fi_ep_attr *ep_attr, struct fi_tx_attr *tx_at
 int sock_get_src_addr(struct sockaddr_in *dest_addr,
 		      struct sockaddr_in *src_addr);
 int sock_get_src_addr_from_hostname(struct sockaddr_in *src_addr, const char *service);
-void sock_getnodename(char *buf, int buflen);
 
 struct fi_info *sock_fi_info(enum fi_ep_type ep_type,
 			     struct fi_info *hints, void *src_addr, void *dest_addr);
@@ -1096,7 +1094,8 @@ struct sock_conn *sock_ep_connect(struct sock_ep_attr *attr, fi_addr_t index);
 ssize_t sock_conn_send_src_addr(struct sock_ep_attr *ep_attr, struct sock_tx_ctx *tx_ctx,
 				struct sock_conn *conn);
 int sock_conn_listen(struct sock_ep_attr *ep_attr);
-void sock_conn_map_destroy(struct sock_conn_map *cmap);
+void sock_conn_map_destroy(struct sock_ep_attr *ep_attr);
+void sock_conn_reset_entry(struct sock_conn *conn);
 void sock_set_sockopts(int sock);
 int fd_set_nonblock(int fd);
 void sock_set_sockopt_reuseaddr(int sock);

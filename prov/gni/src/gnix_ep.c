@@ -119,14 +119,14 @@ static inline ssize_t __ep_recvv(struct fid_ep *ep, const struct iovec *iov,
 {
 	struct gnix_fid_ep *ep_priv;
 
-	if (!ep || !iov || !count || count > GNIX_MAX_IOV_LIMIT) {
+	if (!ep || !iov || count > GNIX_MAX_IOV_LIMIT) {
 		return -FI_EINVAL;
 	}
 
 	ep_priv = container_of(ep, struct gnix_fid_ep, ep_fid);
 	assert(GNIX_EP_RDM_DGM_MSG(ep_priv->type));
 
-	if (count == 1) {
+	if (count <= 1) {
 		return _gnix_recv(ep_priv, (uint64_t)iov[0].iov_base,
 				  iov[0].iov_len, desc ? desc[0] : NULL,
 				  src_addr, context,
@@ -609,7 +609,7 @@ DIRECT_FN STATIC ssize_t gnix_ep_writemsg(struct fid_ep *ep, const struct fi_msg
 {
 	struct gnix_fid_ep *gnix_ep;
 
-	if (!ep || !msg || !msg->msg_iov || !msg->rma_iov || !msg->desc ||
+	if (!ep || !msg || !msg->msg_iov || !msg->rma_iov ||
 	    msg->iov_count != 1 || msg->rma_iov_count != 1 ||
 	    msg->rma_iov[0].len > msg->msg_iov[0].iov_len) {
 		return -FI_EINVAL;
@@ -622,7 +622,7 @@ DIRECT_FN STATIC ssize_t gnix_ep_writemsg(struct fid_ep *ep, const struct fi_msg
 
 	return _gnix_rma(gnix_ep, GNIX_FAB_RQ_RDMA_WRITE,
 			 (uint64_t)msg->msg_iov[0].iov_base,
-			 msg->msg_iov[0].iov_len, msg->desc[0],
+			 msg->msg_iov[0].iov_len, msg->desc ? msg->desc[0] : NULL,
 			 msg->addr, msg->rma_iov[0].addr, msg->rma_iov[0].key,
 			 msg->context, flags, msg->data);
 }
@@ -1914,6 +1914,15 @@ DIRECT_FN int gnix_ep_open(struct fid_domain *domain, struct fi_info *info,
 	return ret;
 
 err:
+	if (ep_priv->xpmem_hndl) {
+		if (_gnix_xpmem_handle_destroy(ep_priv->xpmem_hndl) !=
+		    FI_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_CTRL,
+				  "_gnix_xpmem_handle_destroy returned %s\n",
+				  fi_strerror(-ret));
+		}
+	}
+
 	__destruct_tag_storages(ep_priv);
 
 	if (free_list_inited == true)

@@ -30,64 +30,53 @@
  * SOFTWARE.
  */
 
-#include "rxm.h"
+#include <rdma/fi_errno.h>
 
-struct fi_tx_attr rxm_tx_attr = {
-	.caps = FI_MSG | FI_SEND,
-	.comp_order = FI_ORDER_STRICT,
-	.inject_size = 0,
-	.size = 1024,
+#include <prov.h>
+#include "rxd.h"
+
+int rxd_alter_layer_info(struct fi_info *layer_info, struct fi_info *base_info)
+{
+	base_info->caps = FI_MSG;
+	base_info->mode = FI_LOCAL_MR;
+	base_info->ep_attr->type = FI_EP_DGRAM;
+	return 0;
+}
+
+int rxd_alter_base_info(struct fi_info *base_info, struct fi_info *layer_info)
+{
+	layer_info->caps = rxd_info.caps;
+	layer_info->mode = rxd_info.mode;
+
+	*layer_info->tx_attr = *rxd_info.tx_attr;
+	*layer_info->rx_attr = *rxd_info.rx_attr;
+	*layer_info->ep_attr = *rxd_info.ep_attr;
+	*layer_info->domain_attr = *rxd_info.domain_attr;
+	return 0;
+}
+
+static int rxd_getinfo(uint32_t version, const char *node, const char *service,
+			uint64_t flags, struct fi_info *hints, struct fi_info **info)
+{
+	return ofix_getinfo(version, node, service, flags, &rxd_util_prov,
+			    hints, rxd_alter_layer_info, rxd_alter_base_info, 0, info);
+}
+
+static void rxd_fini(void)
+{
+	/* yawn */
+}
+
+struct fi_provider rxd_prov = {
+	.name = "rxd",
+	.version = FI_VERSION(RXD_MAJOR_VERSION, RXD_MINOR_VERSION),
+	.fi_version = RXD_FI_VERSION,
+	.getinfo = rxd_getinfo,
+	.fabric = rxd_fabric,
+	.cleanup = rxd_fini
 };
 
-struct fi_rx_attr rxm_rx_attr = {
-	.caps = FI_MSG | FI_RECV,
-	.comp_order = FI_ORDER_STRICT,
-	.size = 1024,
-};
-
-struct fi_ep_attr rxm_ep_attr = {
-	.type = FI_EP_RDM,
-	.protocol = FI_PROTO_RXM,
-	.protocol_version = 1,
-	.tx_ctx_cnt = 1,
-	.rx_ctx_cnt = 1
-};
-
-struct fi_domain_attr rxm_domain_attr = {
-	.name = "rxm",
-	.threading = FI_THREAD_SAFE,
-	.control_progress = FI_PROGRESS_AUTO,
-	.data_progress = FI_PROGRESS_AUTO,
-	.resource_mgmt = FI_RM_ENABLED,
-	.av_type = FI_AV_UNSPEC,
-	.mr_mode = FI_MR_BASIC,
-	.cq_cnt = (1 << 16),
-	.ep_cnt = (1 << 15),
-	.tx_ctx_cnt = 1,
-	.rx_ctx_cnt = 1,
-	.max_ep_tx_ctx = 1,
-	.max_ep_rx_ctx = 1
-};
-
-struct fi_fabric_attr rxm_fabric_attr = {
-	.name = "",
-	.prov_version = FI_VERSION(RXM_MAJOR_VERSION, RXM_MINOR_VERSION),
-	.prov_name = "rxm",
-};
-
-struct fi_info rxm_info = {
-	.caps = FI_MSG | FI_SEND | FI_RECV | FI_SOURCE,
-	.mode = FI_LOCAL_MR,
-	.addr_format = FI_SOCKADDR,
-	.tx_attr = &rxm_tx_attr,
-	.rx_attr = &rxm_rx_attr,
-	.ep_attr = &rxm_ep_attr,
-	.domain_attr = &rxm_domain_attr,
-	.fabric_attr = &rxm_fabric_attr
-};
-
-struct util_prov rxm_util_prov = {
-	.prov = &rxm_prov,
-	.info = &rxm_info,
-	.flags = 0,
-};
+RXD_INI
+{
+	return &rxd_prov;
+}

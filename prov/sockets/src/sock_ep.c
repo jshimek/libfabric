@@ -46,6 +46,7 @@
 #include <ifaddrs.h>
 #endif
 
+#include "fi_util.h"
 #include "sock.h"
 #include "sock_util.h"
 
@@ -553,7 +554,7 @@ static ssize_t sock_rx_size_left(struct fid_ep *ep)
 		return -FI_EINVAL;
 	}
 
-	return rx_ctx->num_left;
+	return rx_ctx->enabled ? rx_ctx->num_left : -FI_EOPBADSTATE;
 }
 
 static ssize_t sock_tx_size_left(struct fid_ep *ep)
@@ -576,6 +577,9 @@ static ssize_t sock_tx_size_left(struct fid_ep *ep)
 		SOCK_LOG_ERROR("Invalid EP type\n");
 		return -FI_EINVAL;
 	}
+
+	if (!tx_ctx->enabled)
+		return -FI_EOPBADSTATE;
 
 	fastlock_acquire(&tx_ctx->wlock);
 	num_left = rbavail(&tx_ctx->rb)/SOCK_EP_TX_ENTRY_SZ;
@@ -693,7 +697,7 @@ static int sock_ep_close(struct fid *fid)
 	if (sock_ep->attr->dest_addr)
 		free(sock_ep->attr->dest_addr);
 
-	sock_conn_map_destroy(&sock_ep->attr->cmap);
+	sock_conn_map_destroy(sock_ep->attr);
 	atomic_dec(&sock_ep->attr->domain->ref);
 	fastlock_destroy(&sock_ep->attr->lock);
 	free(sock_ep->attr);
@@ -1472,7 +1476,7 @@ int sock_get_src_addr_from_hostname(struct sockaddr_in *src_addr,
 	ai.ai_family = AF_INET;
 	ai.ai_socktype = SOCK_STREAM;
 
-	sock_getnodename(hostname, sizeof(hostname));
+	ofi_getnodename(hostname, sizeof(hostname));
 	ret = getaddrinfo(hostname, service, &ai, &rai);
 	if (ret) {
 		SOCK_LOG_DBG("getaddrinfo failed!\n");
@@ -1609,7 +1613,6 @@ int sock_alloc_endpoint(struct fid_domain *domain, struct fi_info *info,
 	atomic_initialize(&sock_ep->attr->num_tx_ctx, 0);
 	atomic_initialize(&sock_ep->attr->num_rx_ctx, 0);
 	fastlock_init(&sock_ep->attr->lock);
-	dlist_init(&sock_ep->attr->conn_list);
 
 	if (sock_ep->attr->ep_attr.tx_ctx_cnt == FI_SHARED_CONTEXT)
 		sock_ep->attr->tx_shared = 1;
@@ -1740,7 +1743,8 @@ int sock_ep_get_conn(struct sock_ep_attr *attr, struct sock_tx_ctx *tx_ctx,
 	conn = sock_ep_lookup_conn(attr, av_index, addr);
 	if (!conn) {
 		conn = SOCK_CM_CONN_IN_PROGRESS;
-		idm_set(&attr->av_idm, av_index, conn);
+		if (idm_set(&attr->av_idm, av_index, conn) < 0)
+			SOCK_LOG_ERROR("idm_set failed\n");
 	}
 	fastlock_release(&attr->cmap.lock);
 

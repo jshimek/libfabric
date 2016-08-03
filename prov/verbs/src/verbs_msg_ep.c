@@ -424,12 +424,22 @@ static int fi_ibv_pep_close(fid_t fid)
 	return 0;
 }
 
-static struct fi_ops fi_ibv_pep_ops = {
+static struct fi_ops fi_ibv_pep_fi_ops = {
 	.size = sizeof(struct fi_ops),
 	.close = fi_ibv_pep_close,
 	.bind = fi_ibv_pep_bind,
 	.control = fi_ibv_pep_control,
 	.ops_open = fi_no_ops_open,
+};
+
+static struct fi_ops_ep fi_ibv_pep_ops = {
+	.size = sizeof(struct fi_ops_ep),
+	.getopt = fi_ibv_msg_ep_getopt,
+	.setopt = fi_no_setopt,
+	.tx_ctx = fi_no_tx_ctx,
+	.rx_ctx = fi_no_rx_ctx,
+	.rx_size_left = fi_no_rx_size_left,
+	.tx_size_left = fi_no_tx_size_left,
 };
 
 int fi_ibv_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
@@ -442,7 +452,7 @@ int fi_ibv_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
 	if (!_pep)
 		return -FI_ENOMEM;
 
-	ret = rdma_create_id(NULL, &_pep->id, NULL, RDMA_PS_TCP);
+	ret = rdma_create_id(NULL, &_pep->id, &_pep->pep_fid.fid, RDMA_PS_TCP);
 	if (ret) {
 		FI_INFO(&fi_ibv_prov, FI_LOG_DOMAIN, "Unable to create rdma_cm_id\n");
 		goto err1;
@@ -457,11 +467,10 @@ int fi_ibv_passive_ep(struct fid_fabric *fabric, struct fi_info *info,
 		_pep->bound = 1;
 	}
 
-	_pep->id->context = &_pep->pep_fid.fid;
-
 	_pep->pep_fid.fid.fclass = FI_CLASS_PEP;
 	_pep->pep_fid.fid.context = context;
-	_pep->pep_fid.fid.ops = &fi_ibv_pep_ops;
+	_pep->pep_fid.fid.ops = &fi_ibv_pep_fi_ops;
+	_pep->pep_fid.ops = &fi_ibv_pep_ops;
 	_pep->pep_fid.cm = fi_ibv_pep_ops_cm(_pep);
 
 	_pep->src_addrlen = info->src_addrlen;

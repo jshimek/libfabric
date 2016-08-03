@@ -113,6 +113,15 @@ AC_CHECK_FUNC([pthread_spin_init],
 	[have_spinlock=1],
 	[have_spinlock=0])
 
+dnl shm_open not used in the common code on os-x
+
+if test "$macos" -eq 0; then
+AC_CHECK_FUNC([shm_open],
+	[],
+	[AC_SEARCH_LIBS([shm_open],[rt],[],
+	 [AC_MSG_ERROR([shm_open() not found.  libfabric requires shm_open.])])])
+fi
+
 AC_DEFINE_UNQUOTED([PT_LOCK_SPIN], [$have_spinlock],
 	[Define to 1 if pthread_spin_init is available.])
 
@@ -220,6 +229,7 @@ AC_TRY_LINK(
 
 AC_DEFINE_UNQUOTED([HAVE_ALIAS_ATTRIBUTE], [$ac_prog_cc_alias_symbols],
 	  	   [Define to 1 if the linker supports alias attribute.])
+AC_CHECK_FUNCS([getifaddrs])
 
 dnl Provider-specific checks
 FI_PROVIDER_INIT
@@ -234,6 +244,7 @@ FI_PROVIDER_SETUP([mxm])
 FI_PROVIDER_SETUP([gni])
 FI_PROVIDER_SETUP([udp])
 FI_PROVIDER_SETUP([rxm])
+FI_PROVIDER_SETUP([rxd])
 FI_PROVIDER_FINI
 dnl Configure the .pc file
 FI_PROVIDER_SETUP_PC

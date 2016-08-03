@@ -30,64 +30,67 @@
  * SOFTWARE.
  */
 
-#include "rxm.h"
+#include "rxd.h"
 
-struct fi_tx_attr rxm_tx_attr = {
-	.caps = FI_MSG | FI_SEND,
+struct fi_tx_attr rxd_tx_attr = {
+	.caps = FI_MSG | FI_TAGGED | FI_SEND,
 	.comp_order = FI_ORDER_STRICT,
 	.inject_size = 0,
-	.size = 1024,
+	.size = (1ULL << RXD_MAX_TX_BITS),
+	.iov_limit = RXD_IOV_LIMIT,
 };
 
-struct fi_rx_attr rxm_rx_attr = {
-	.caps = FI_MSG | FI_RECV,
+struct fi_rx_attr rxd_rx_attr = {
+	.caps = FI_MSG | FI_TAGGED | FI_RECV | FI_SOURCE,
 	.comp_order = FI_ORDER_STRICT,
-	.size = 1024,
+	.total_buffered_recv = 0,
+	.size = (1ULL << RXD_MAX_RX_BITS),
+	.iov_limit = RXD_IOV_LIMIT
 };
 
-struct fi_ep_attr rxm_ep_attr = {
+struct fi_ep_attr rxd_ep_attr = {
 	.type = FI_EP_RDM,
-	.protocol = FI_PROTO_RXM,
+	.protocol = FI_PROTO_RXD,
 	.protocol_version = 1,
+	.max_msg_size = UINT64_MAX,
 	.tx_ctx_cnt = 1,
 	.rx_ctx_cnt = 1
 };
 
-struct fi_domain_attr rxm_domain_attr = {
-	.name = "rxm",
+struct fi_domain_attr rxd_domain_attr = {
+	.name = "rxd",
 	.threading = FI_THREAD_SAFE,
 	.control_progress = FI_PROGRESS_AUTO,
 	.data_progress = FI_PROGRESS_AUTO,
 	.resource_mgmt = FI_RM_ENABLED,
 	.av_type = FI_AV_UNSPEC,
-	.mr_mode = FI_MR_BASIC,
-	.cq_cnt = (1 << 16),
-	.ep_cnt = (1 << 15),
+	.mr_mode = FI_MR_SCALABLE,
+	.cq_cnt = RXD_DEF_CQ_CNT,
+	.ep_cnt = RXD_DEF_EP_CNT,
 	.tx_ctx_cnt = 1,
 	.rx_ctx_cnt = 1,
 	.max_ep_tx_ctx = 1,
 	.max_ep_rx_ctx = 1
 };
 
-struct fi_fabric_attr rxm_fabric_attr = {
+struct fi_fabric_attr rxd_fabric_attr = {
 	.name = "",
-	.prov_version = FI_VERSION(RXM_MAJOR_VERSION, RXM_MINOR_VERSION),
-	.prov_name = "rxm",
+	.prov_version = FI_VERSION(RXD_MAJOR_VERSION, RXD_MINOR_VERSION),
+	.prov_name = "rxd",
 };
 
-struct fi_info rxm_info = {
-	.caps = FI_MSG | FI_SEND | FI_RECV | FI_SOURCE,
-	.mode = FI_LOCAL_MR,
+struct fi_info rxd_info = {
+	.caps = FI_MSG | FI_SEND | FI_RECV | FI_SOURCE | FI_TAGGED,
 	.addr_format = FI_SOCKADDR,
-	.tx_attr = &rxm_tx_attr,
-	.rx_attr = &rxm_rx_attr,
-	.ep_attr = &rxm_ep_attr,
-	.domain_attr = &rxm_domain_attr,
-	.fabric_attr = &rxm_fabric_attr
+	.tx_attr = &rxd_tx_attr,
+	.rx_attr = &rxd_rx_attr,
+	.ep_attr = &rxd_ep_attr,
+	.domain_attr = &rxd_domain_attr,
+	.fabric_attr = &rxd_fabric_attr
 };
 
-struct util_prov rxm_util_prov = {
-	.prov = &rxm_prov,
-	.info = &rxm_info,
+struct util_prov rxd_util_prov = {
+	.prov = &rxd_prov,
+	.info = &rxd_info,
 	.flags = 0,
 };
