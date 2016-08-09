@@ -914,6 +914,7 @@ __gnix_fabric_ops_native_amo(struct fid_ep *ep, const void *buf, size_t count,
 	msg.addr = dest_addr;
 	msg.rma_iov = &rma_iov;
 	msg.datatype = datatype;
+	msg.op = FI_ATOMIC_OP_LAST; /* not FI_ATOMIC_OP */
 	msg.context = context;
 	result_iov.addr = result;
 	result_iov.count = 1;
@@ -1261,6 +1262,14 @@ DIRECT_FN STATIC int gnix_ep_control(fid_t fid, int command, void *arg)
 	 */
 	case FI_ENABLE:
 		if (GNIX_EP_RDM_DGM(ep->type)) {
+			if ((ep->send_cq && ep->tx_enabled)) {
+				ret = -FI_EOPBADSTATE;
+				goto err;
+			}
+			if ((ep->recv_cq && ep->rx_enabled)) {
+				ret = -FI_EOPBADSTATE;
+				goto err;
+			}
 			ret = _gnix_vc_cm_init(ep->cm_nic);
 			if (ret != FI_SUCCESS) {
 				GNIX_WARN(FI_LOG_EP_CTRL,
