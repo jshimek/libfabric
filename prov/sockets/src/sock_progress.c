@@ -285,7 +285,7 @@ static void sock_pe_report_mr_completion(struct sock_domain *domain,
 
 	for (i = 0; i < pe_entry->msg_hdr.dest_iov_len; i++) {
 		fastlock_acquire(&domain->lock);
-		mr = sock_mr_get_entry(domain, pe_entry->pe.rx.rx_iov[i].iov.key);
+		mr = ofi_mr_retrieve(domain->mr_heap, pe_entry->pe.rx.rx_iov[i].iov.key);
 		fastlock_release(&domain->lock);
 		if (!mr || (!mr->cq && !mr->cntr))
 			continue;
@@ -662,7 +662,7 @@ static int sock_pe_process_rx_read(struct sock_pe *pe,
 
 		mr = sock_mr_verify_key(rx_ctx->domain,
 					pe_entry->pe.rx.rx_iov[i].iov.key,
-					(void *) (uintptr_t) pe_entry->pe.rx.rx_iov[i].iov.addr,
+					&pe_entry->pe.rx.rx_iov[i].iov.addr,
 					pe_entry->pe.rx.rx_iov[i].iov.len,
 					FI_REMOTE_READ);
 		if (!mr) {
@@ -677,8 +677,6 @@ static int sock_pe_process_rx_read(struct sock_pe *pe,
 			return 0;
 		}
 
-		if (mr->domain->attr.mr_mode == FI_MR_SCALABLE)
-			pe_entry->pe.rx.rx_iov[i].iov.addr += mr->offset;
 		data_len += pe_entry->pe.rx.rx_iov[i].iov.len;
 	}
 	pe_entry->mr_checked = 1;
@@ -715,7 +713,7 @@ static int sock_pe_process_rx_write(struct sock_pe *pe,
 	for (i = 0; i < pe_entry->msg_hdr.dest_iov_len && !pe_entry->mr_checked; i++) {
 		mr = sock_mr_verify_key(rx_ctx->domain,
 					pe_entry->pe.rx.rx_iov[i].iov.key,
-					(void *) (uintptr_t) pe_entry->pe.rx.rx_iov[i].iov.addr,
+					&pe_entry->pe.rx.rx_iov[i].iov.addr,
 					pe_entry->pe.rx.rx_iov[i].iov.len,
 					FI_REMOTE_WRITE);
 		if (!mr) {
@@ -729,9 +727,6 @@ static int sock_pe_process_rx_write(struct sock_pe *pe,
 					      SOCK_OP_WRITE_ERROR, FI_EACCES);
 			return 0;
 		}
-
-		if (mr->domain->attr.mr_mode == FI_MR_SCALABLE)
-			pe_entry->pe.rx.rx_iov[i].iov.addr += mr->offset;
 	}
 	pe_entry->mr_checked = 1;
 
@@ -1204,7 +1199,7 @@ static int sock_pe_process_rx_atomic(struct sock_pe *pe,
 	for (i = 0; i < pe_entry->pe.rx.rx_op.dest_iov_len && !pe_entry->mr_checked; i++) {
 		mr = sock_mr_verify_key(rx_ctx->domain,
 					pe_entry->pe.rx.rx_iov[i].ioc.key,
-					(void *) (uintptr_t) pe_entry->pe.rx.rx_iov[i].ioc.addr,
+					&pe_entry->pe.rx.rx_iov[i].ioc.addr,
 					pe_entry->pe.rx.rx_iov[i].ioc.count * datatype_sz,
 					FI_REMOTE_WRITE);
 		if (!mr) {
@@ -1218,8 +1213,6 @@ static int sock_pe_process_rx_atomic(struct sock_pe *pe,
 					      SOCK_OP_ATOMIC_ERROR, FI_EACCES);
 			return 0;
 		}
-		if (mr->domain->attr.mr_mode == FI_MR_SCALABLE)
-			pe_entry->pe.rx.rx_iov[i].ioc.addr += mr->offset;
 	}
 	pe_entry->mr_checked = 1;
 
@@ -2154,23 +2147,16 @@ static int sock_pe_progress_rx_pe_entry(struct sock_pe *pe,
 					struct sock_rx_ctx *rx_ctx)
 {
 	int ret;
-	struct sock_conn *conn;
 
 	if (sock_comm_is_disconnected(pe_entry)) {
 		SOCK_LOG_DBG("conn disconnected: removing fd from pollset\n");
-		sock_pe_poll_del(pe, pe_entry->conn->sock_fd);
-		ofi_close_socket(pe_entry->conn->sock_fd);
-
-		fastlock_acquire(&pe_entry->ep_attr->lock);
-		sock_epoll_del(&pe_entry->ep_attr->cmap.epoll_set,
-			       pe_entry->conn->sock_fd);
-		conn = idm_lookup(&pe_entry->ep_attr->conn_idm, pe_entry->conn->sock_fd);
-		if (conn) {
-			sock_conn_reset_entry(conn);
+		if (pe_entry->conn->sock_fd != -1) {
+			fastlock_acquire(&pe_entry->ep_attr->cmap.lock);
+			sock_pe_poll_del(pe, pe_entry->conn->sock_fd);
 			idm_clear(&pe_entry->ep_attr->conn_idm, pe_entry->conn->sock_fd);
+			sock_conn_release_entry(&pe_entry->ep_attr->cmap, pe_entry->conn);
+			fastlock_release(&pe_entry->ep_attr->cmap.lock);
 		}
-		pe_entry->ep_attr->cmap.used--;
-		fastlock_release(&pe_entry->ep_attr->lock);
 
 		if (pe_entry->pe.rx.header_read)
 			sock_pe_report_rx_error(pe_entry, 0, FI_EIO);

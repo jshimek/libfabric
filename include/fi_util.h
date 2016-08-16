@@ -63,6 +63,30 @@
 
 #define UTIL_FLAG_ERROR	(1ULL << 60)
 
+#define OFI_Q_STERROR(prov, log, q, q_str, entry, strerror)			\
+	FI_WARN(prov, log, "fi_" q_str "_readerr: prov_err:%s", entry.err,	\
+			strerror(q, entry.prov_errno, entry.err_data, NULL, 0))
+
+#define OFI_Q_READERR(prov, log, q, q_str, readerr, strerror, ret, err_entry)	\
+	do {									\
+		ret = readerr(q, &err_entry, 0);				\
+		if (ret != sizeof(err_entry)) {					\
+			FI_WARN(prov, log,					\
+					"Unable to fi_" q_str "_readerr\n");	\
+		} else {							\
+			OFI_Q_STERROR(prov, log, q, q_str,			\
+					err_entry, strerror);			\
+		}								\
+	} while (0)
+
+#define OFI_CQ_READERR(prov, log, cq, ret, err_entry)		\
+	OFI_Q_READERR(prov, log, cq, "cq", fi_cq_readerr,	\
+			fi_cq_strerror, ret, err_entry)
+
+#define OFI_EQ_READERR(prov, log, eq, ret, err_entry)		\
+	OFI_Q_READERR(prov, log, eq, "eq", fi_eq_readerr, 	\
+			fi_eq_strerror, ret, err_entry)
+
 enum fi_match_type {
 	FI_MATCH_EXACT,
 	FI_MATCH_PREFIX,
@@ -128,6 +152,10 @@ int ofi_domain_init(struct fid_fabric *fabric_fid, const struct fi_info *info,
 int ofi_domain_close(struct util_domain *domain);
 
 
+/*
+ * Endpoint
+ */
+
 struct util_ep;
 typedef void (*fi_ep_progress_func)(struct util_ep *util_ep);
 
@@ -142,6 +170,9 @@ struct util_ep {
 	fi_ep_progress_func	progress;
 };
 
+int ofi_endpoint_init(struct fid_domain *domain, const struct util_prov *util_prov,
+		struct fi_info *info, struct util_ep *ep, void *context,
+		enum fi_match_type type);
 
 /*
  * Completion queue
@@ -261,6 +292,65 @@ int ofi_get_src_addr(uint32_t addr_format,
 		     const void *dest_addr, size_t dest_addrlen,
 		     void **src_addr, size_t *src_addrlen);
 void ofi_getnodename(char *buf, int buflen);
+int ofi_av_get_index(struct util_av *av, const void *addr);
+
+/*
+ * Connection Map
+ */
+
+enum util_cmap_state {
+	CMAP_UNSPEC,
+	CMAP_CONNECTING,
+	CMAP_CONNECTED
+};
+
+struct util_cmap_handle {
+	struct util_cmap *cmap;
+	enum util_cmap_state state;
+	struct util_cmap_key *key;
+	size_t key_index;
+	fi_addr_t fi_addr;
+	struct util_cmap_peer *peer;
+};
+
+struct util_cmap_key {
+	struct util_cmap_handle *handle;
+};
+DECLARE_FREESTACK(struct util_cmap_key, util_cmap_keypool);
+
+struct util_cmap_peer {
+	struct util_cmap_handle *handle;
+	struct dlist_entry entry;
+	size_t addrlen;
+	uint8_t addr[];
+};
+
+typedef void (*ofi_cmap_free_handle_func)(void *arg);
+
+struct util_cmap {
+	struct util_av *av;
+	struct util_cmap_handle **handles;
+	struct util_cmap_keypool *keypool;
+	struct dlist_entry peer_list;
+	ofi_cmap_free_handle_func free_handle;
+	fastlock_t lock;
+};
+
+void ofi_cmap_update_state(struct util_cmap_handle *handle,
+		enum util_cmap_state state);
+/*
+ * Caller must hold cmap->lock. Either fi_addr or
+ * addr and addrlen args should be present.
+ */
+int ofi_cmap_add_handle(struct util_cmap *cmap, struct util_cmap_handle *handle,
+		enum util_cmap_state state, fi_addr_t fi_addr, void *addr,
+		size_t addrlen);
+/* Caller must hold cmap->lock */
+struct util_cmap_handle *ofi_cmap_get_handle(struct util_cmap *cmap, fi_addr_t fi_addr);
+void ofi_cmap_del_handle(struct util_cmap_handle *handle);
+void ofi_cmap_free(struct util_cmap *cmap);
+struct util_cmap *ofi_cmap_alloc(struct util_av *av,
+		ofi_cmap_free_handle_func free_handle);
 
 /*
  * Poll set
@@ -338,6 +428,39 @@ struct util_event {
 
 int ofi_eq_create(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 		 struct fid_eq **eq_fid, void *context);
+
+/*
+ * MR
+ */
+
+
+/*hide addr related info & store prov_mr ptr */
+struct ofi_util_mr {
+    void *map_handle;
+    uint64_t b_key; /* track available key (BASIC usage) */
+    enum fi_mr_mode mr_type;
+    const struct fi_provider *prov;
+};
+
+/*create instance of data structure and return handle to user */
+int ofi_mr_init(const struct fi_provider *in_prov, enum fi_mr_mode mode,
+                                struct ofi_util_mr ** out_new_mr);
+/*insert user mr struct in data structure*/
+int ofi_mr_insert(struct ofi_util_mr * in_mr_h,
+                                const struct fi_mr_attr *in_attr,
+                                uint64_t * out_key, void * in_prov_mr);
+/*return on user mr struct */
+void * ofi_mr_retrieve(struct ofi_util_mr * in_mr_h,  uint64_t in_key);
+/*need address offsetted, verified, and user mr struct returned*/
+/* io_addr is address of buff (&buf) */
+int ofi_mr_retrieve_and_verify(struct ofi_util_mr * in_mr_h, ssize_t in_len,
+                                uintptr_t *io_addr, uint64_t in_key,
+                                uint64_t in_access, void **out_prov_mr);
+/*erase a specific item in the data structure */
+int ofi_mr_erase(struct ofi_util_mr * in_mr_h, uint64_t in_key);
+/*close data structure instance */
+void ofi_mr_close(struct ofi_util_mr *in_mr_h);
+
 
 
 /*

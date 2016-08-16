@@ -46,12 +46,14 @@ common_srcs = \
 	prov/util/src/util_av.c     \
 	prov/util/src/util_cq.c     \
 	prov/util/src/util_domain.c \
+	prov/util/src/util_ep.c \
 	prov/util/src/util_eq.c     \
 	prov/util/src/util_fabric.c \
 	prov/util/src/util_main.c   \
 	prov/util/src/util_poll.c   \
 	prov/util/src/util_wait.c   \
-	prov/util/src/util_buf.c
+	prov/util/src/util_buf.c    \
+	prov/util/src/util_mr.c
 
 if MACOS
 common_srcs += src/osx/osd.c
@@ -288,7 +290,7 @@ pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libfabric.pc
 
 nroff:
-	@for file in $(real_man_pages); do \
+	@for file in $(real_man_pages) $(prov_install_man_pages); do \
 	    source=`echo $$file | sed -e 's@/man[0-9]@@'`; \
 	    config/md2nroff.pl --source=$$source.md; \
 	done
