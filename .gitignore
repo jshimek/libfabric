@@ -13,6 +13,7 @@ config.h
 config.h.in
 config.h.in~
 config.log
+config.lt
 config.status
 configure
 libtool
@@ -38,3 +39,4 @@ config/test-driver
 prov/gni/test/gnitest
 util/fi_info
 util/fi_strerror
+util/fi_pingpong

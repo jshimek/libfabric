@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2014 Intel Corporation, Inc.  All rights reserved.
+ * Copyright (c) 2016 Cisco Systems, Inc.  All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -403,6 +404,19 @@ out:
 	return ret;
 }
 
+static int sock_fi_checkinfo(struct fi_info *info, struct fi_info *hints)
+{
+	if (hints && hints->domain_attr && hints->domain_attr->name &&
+             strcmp(info->domain_attr->name, hints->domain_attr->name))
+		return -FI_ENODATA;
+
+	if (hints && hints->fabric_attr && hints->fabric_attr->name &&
+             strcmp(info->fabric_attr->name, hints->fabric_attr->name))
+		return -FI_ENODATA;
+
+	return 0;
+}
+
 static int sock_ep_getinfo(const char *node, const char *service, uint64_t flags,
 			   struct fi_info *hints, enum fi_ep_type ep_type,
 			   struct fi_info **info)
@@ -472,6 +486,10 @@ static int sock_ep_getinfo(const char *node, const char *service, uint64_t flags
 
 	if (rai)
 		freeaddrinfo(rai);
+
+	if (ret == 0)
+		return sock_fi_checkinfo(*info, hints);
+
 	return ret;
 }
 
@@ -700,7 +718,8 @@ static int sock_getinfo(uint32_t version, const char *node, const char *service,
 			return ret;
 		}
 	}
-	return 0;
+
+	return (!*info) ? ret : 0;
 }
 
 static void fi_sockets_fini(void)
@@ -711,7 +730,7 @@ static void fi_sockets_fini(void)
 struct fi_provider sock_prov = {
 	.name = sock_prov_name,
 	.version = FI_VERSION(SOCK_MAJOR_VERSION, SOCK_MINOR_VERSION),
-	.fi_version = FI_VERSION(1, 3),
+	.fi_version = FI_VERSION(1, 4),
 	.getinfo = sock_getinfo,
 	.fabric = sock_fabric,
 	.cleanup = fi_sockets_fini

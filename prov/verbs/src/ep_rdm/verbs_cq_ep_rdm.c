@@ -100,7 +100,7 @@ static ssize_t fi_ibv_rdm_tagged_cq_read(struct fid_cq *cq, void *buf,
 {
 	struct fi_ibv_rdm_cq *_cq =
 		container_of(cq, struct fi_ibv_rdm_cq, cq_fid);
-	const size_t _count = _cq->ep->n_buffs;
+	const size_t _count = _cq->read_bunch_size;
 	fi_addr_t addr[_count];
 
 	return fi_ibv_rdm_tagged_cq_readfrom(cq, buf, MIN(_count, count), addr);
@@ -114,6 +114,7 @@ ssize_t fi_ibv_rdm_cq_sreadfrom(struct fid_cq *cq, void *buf, size_t count,
 	uint64_t time_limit = fi_gettime_ms() + timeout;
 	size_t counter = 0;
 	ssize_t ret = 0;
+	struct fi_cq_tagged_entry *cqe_buf = buf;
 
 	struct fi_ibv_rdm_cq *_cq = container_of(cq, struct fi_ibv_rdm_cq, cq_fid);
 	switch (_cq->wait_cond) {
@@ -127,7 +128,8 @@ ssize_t fi_ibv_rdm_cq_sreadfrom(struct fid_cq *cq, void *buf, size_t count,
 	}
 
 	do {
-		ret = fi_ibv_rdm_tagged_cq_readfrom(cq, buf, threshold,
+		ret = fi_ibv_rdm_tagged_cq_readfrom(cq, &cqe_buf[counter],
+						    threshold - counter,
 						    src_addr);
 		counter += (ret > 0) ? ret : 0;
 	} while ((ret >= 0) && (counter < threshold ||
@@ -147,7 +149,7 @@ ssize_t fi_ibv_rdm_cq_sread(struct fid_cq *cq, void *buf, size_t count,
 {
 	struct fi_ibv_rdm_cq *_cq =
 		container_of(cq, struct fi_ibv_rdm_cq, cq_fid);
-	size_t chunk		= MIN(_cq->ep->n_buffs, count);
+	size_t chunk		= MIN(_cq->read_bunch_size, count);
 	uint64_t time_limit	= fi_gettime_ms() + timeout;
 	size_t rest		= count;
 	fi_addr_t addr[chunk];
@@ -251,6 +253,7 @@ int fi_ibv_rdm_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 {
 	struct fi_ibv_rdm_cq *_cq;
 	int ret;
+	int param;
 
 	_cq = calloc(1, sizeof *_cq);
 	if (!_cq)
@@ -295,6 +298,18 @@ int fi_ibv_rdm_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 
 	dlist_init(&fi_ibv_rdm_comp_queue.request_cq);
 	dlist_init(&fi_ibv_rdm_comp_queue.request_errcq);
+
+	_cq->read_bunch_size = FI_IBV_RDM_DFLT_CQREAD_BUNCH_SIZE;
+	if (!fi_param_get_int(&fi_ibv_prov, "rdm_cqread_bunch_size", &param)) {
+		if (param > 0) {
+			_cq->read_bunch_size = param;
+		} else {
+			FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
+				"invalid value of rdm_cqread_bunch_size\n");
+			ret = -FI_EINVAL;
+			goto err;
+		}
+	}
 
 	*cq = &_cq->cq_fid;
 	return 0;

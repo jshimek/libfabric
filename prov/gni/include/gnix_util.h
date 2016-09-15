@@ -235,6 +235,7 @@ int _gnix_job_cq_limit(uint32_t dev_id, uint8_t ptag, uint32_t *limit);
 int _gnix_pes_on_node(uint32_t *num_pes);
 int _gnix_nics_per_rank(uint32_t *nics_per_rank);
 void _gnix_dump_gni_res(uint8_t ptag);
+int _gnix_get_num_corespec_cpus(uint32_t *num_core_spec_cpus);
 
 struct gnix_reference {
 	atomic_t references;
@@ -296,5 +297,13 @@ static inline void _gnix_ref_init(
 	__COND_FUNC((cond), (lock), fastlock_release)
 #define COND_RW_RELEASE(cond, lock) \
 	__COND_FUNC((cond), (lock), rwlock_unlock)
+#ifdef __GNUC__
+#define __PREFETCH(addr, rw, locality) __builtin_prefetch(addr, rw, locality)
+#else 
+#define __PREFETCH(addr, rw, locality) ((void *) 0)
+#endif
+
+#define READ_PREFETCH(addr) __PREFETCH(addr, 0, 3)
+#define WRITE_PREFETCH(addr) __PREFETCH(addr, 1, 3)
 
 #endif

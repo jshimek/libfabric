@@ -271,7 +271,6 @@ struct sock_cntr {
 	struct fid_cntr cntr_fid;
 	struct sock_domain *domain;
 	atomic_t value;
-	atomic_t threshold;
 	atomic_t ref;
 	atomic_t err_cnt;
 	atomic_t last_read_val;
@@ -288,7 +287,7 @@ struct sock_cntr {
 
 	struct fid_wait *waitset;
 	int signal;
-	int is_waiting;
+	atomic_t num_waiting;
 	int err_flag;
 };
 
@@ -942,6 +941,7 @@ int sock_verify_info(struct fi_info *hints);
 int sock_verify_fabric_attr(struct fi_fabric_attr *attr);
 int sock_verify_domain_attr(struct fi_domain_attr *attr);
 
+size_t sock_get_tx_size(size_t size);
 int sock_rdm_verify_ep_attr(struct fi_ep_attr *ep_attr, struct fi_tx_attr *tx_attr,
 			    struct fi_rx_attr *rx_attr);
 int sock_dgram_verify_ep_attr(struct fi_ep_attr *ep_attr, struct fi_tx_attr *tx_attr,

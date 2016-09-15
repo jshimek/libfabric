@@ -308,7 +308,7 @@ static inline ssize_t __ep_sendmsg(struct fid_ep *ep, const struct fi_msg *msg,
 }
 
 static inline ssize_t __ep_inject(struct fid_ep *ep, const void *buf,
-				  size_t len, fi_addr_t dest_addr,
+				  size_t len, uint64_t data, fi_addr_t dest_addr,
 				  uint64_t flags, uint64_t tag)
 {
 	struct gnix_fid_ep *gnix_ep;
@@ -325,7 +325,7 @@ static inline ssize_t __ep_inject(struct fid_ep *ep, const void *buf,
 			GNIX_SUPPRESS_COMPLETION | flags);
 
 	return _gnix_send(gnix_ep, (uint64_t)buf, len, NULL, dest_addr,
-			  NULL, inject_flags, 0, tag);
+			  NULL, inject_flags, data, tag);
 }
 
 static inline ssize_t __ep_senddata(struct fid_ep *ep, const void *buf,
@@ -539,7 +539,7 @@ DIRECT_FN STATIC ssize_t gnix_ep_sendmsg(struct fid_ep *ep,
 DIRECT_FN STATIC ssize_t gnix_ep_msg_inject(struct fid_ep *ep, const void *buf,
 					    size_t len, fi_addr_t dest_addr)
 {
-	return __ep_inject(ep, buf, len, dest_addr, 0, 0);
+	return __ep_inject(ep, buf, len, 0, dest_addr, 0, 0);
 }
 
 DIRECT_FN STATIC ssize_t gnix_ep_senddata(struct fid_ep *ep, const void *buf,
@@ -893,7 +893,7 @@ DIRECT_FN STATIC ssize_t gnix_ep_tinject(struct fid_ep *ep, const void *buf,
 					 size_t len, fi_addr_t dest_addr,
 					 uint64_t tag)
 {
-	return __ep_inject(ep, buf, len, dest_addr, FI_TAGGED, tag);
+	return __ep_inject(ep, buf, len, 0, dest_addr, FI_TAGGED, tag);
 }
 
 DIRECT_FN STATIC ssize_t gnix_ep_tsenddata(struct fid_ep *ep, const void *buf,
@@ -923,7 +923,8 @@ DIRECT_FN STATIC ssize_t gnix_ep_tinjectdata(struct fid_ep *ep, const void *buf,
 					     size_t len, uint64_t data,
 					     fi_addr_t dest_addr, uint64_t tag)
 {
-	return -FI_ENOSYS;
+	return __ep_inject(ep, buf, len, data, dest_addr,
+			  FI_TAGGED | FI_REMOTE_CQ_DATA, tag);
 }
 
 
@@ -1738,6 +1739,37 @@ DIRECT_FN int gnix_pep_bind(fid_t fid, fid_t *bfid, uint64_t flags)
 	return -FI_ENOSYS;
 }
 
+static int __gnix_ep_cm_nic_prep(struct gnix_fid_domain *domain,
+				 struct fi_info *info,
+				 uint32_t *cdm_id)
+{
+	int ret = FI_SUCCESS;
+	uint32_t name_type = GNIX_EPN_TYPE_UNBOUND;
+	struct gnix_ep_name *name;
+
+	if (info->src_addr &&
+	    info->src_addrlen == sizeof(struct gnix_ep_name)) {
+		name = (struct gnix_ep_name *)info->src_addr;
+		if (name->name_type == GNIX_EPN_TYPE_BOUND) {
+			/* EP name includes user specified service/port */
+			*cdm_id = name->gnix_addr.cdm_id;
+			name_type = name->name_type;
+		}
+	}
+
+	if (name_type == GNIX_EPN_TYPE_UNBOUND) {
+		ret = _gnix_cm_nic_create_cdm_id(domain, cdm_id);
+		if (ret != FI_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_CTRL,
+				"gnix_cm_nic_create_cdm_id returned %s\n",
+				  fi_strerror(-ret));
+			return ret;
+		}
+	}
+
+	return ret;
+}
+
 /*
  * helper function for initializing an ep of type
  * GNIX_EPN_TYPE_BOUND
@@ -1747,6 +1779,7 @@ static int __gnix_ep_bound_prep(struct gnix_fid_domain *domain,
 				struct gnix_fid_ep *ep)
 {
 	int ret = FI_SUCCESS;
+	uint32_t cdm_id;
 
 	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
 
@@ -1754,8 +1787,14 @@ static int __gnix_ep_bound_prep(struct gnix_fid_domain *domain,
 	assert(info != NULL);
 	assert(ep != NULL);
 
+	ret = __gnix_ep_cm_nic_prep(domain, info, &cdm_id);
+	if (ret != FI_SUCCESS) {
+		return ret;
+	}
+
 	ret = _gnix_cm_nic_alloc(domain,
 				 info,
+				 cdm_id,
 				 &ep->cm_nic);
 	if (ret != FI_SUCCESS) {
 		GNIX_WARN(FI_LOG_EP_CTRL,
@@ -1933,8 +1972,16 @@ DIRECT_FN int gnix_ep_open(struct fid_domain *domain, struct fi_info *info,
 			 * to reduce demand on Aries hw resources.
 			 */
 			if (domain_priv->cm_nic == NULL) {
+				__gnix_ep_cm_nic_prep(domain_priv, info,
+						      &cdm_id);
+				if (ret != FI_SUCCESS) {
+					fastlock_release(
+						 &domain_priv->cm_nic_lock);
+					goto err;
+				}
 				ret = _gnix_cm_nic_alloc(domain_priv,
 							 info,
+							 cdm_id,
 							 &domain_priv->cm_nic);
 				if (ret != FI_SUCCESS) {
 					GNIX_WARN(FI_LOG_EP_CTRL,
@@ -2387,8 +2434,18 @@ DIRECT_FN STATIC int gnix_ep_setopt(fid_t fid, int level, int optname,
 
 DIRECT_FN STATIC ssize_t gnix_ep_rx_size_left(struct fid_ep *ep)
 {
-	if (!ep)
+	if (!ep) {
 		return -FI_EINVAL;
+	}
+
+	struct gnix_fid_ep *ep_priv = container_of(ep,
+						   struct gnix_fid_ep,
+						   ep_fid);
+
+	/* A little arbitrary... */
+	if (ep_priv->htd_pool.enabled == false) {
+		return -FI_EOPBADSTATE;
+	}
 
 	switch (ep->fid.fclass) {
 	case FI_CLASS_EP:
@@ -2401,14 +2458,24 @@ DIRECT_FN STATIC ssize_t gnix_ep_rx_size_left(struct fid_ep *ep)
 		return -FI_EINVAL;
 	}
 
-	/* We can queue RXs indefinitely, return an arbitrary low water mark. */
-	return 64;
+	/* We can queue RXs indefinitely, so just return the default size. */
+	return GNIX_RX_SIZE_DEFAULT;
 }
 
 DIRECT_FN STATIC ssize_t gnix_ep_tx_size_left(struct fid_ep *ep)
 {
-	if (!ep)
+	if (!ep) {
 		return -FI_EINVAL;
+	}
+
+	struct gnix_fid_ep *ep_priv = container_of(ep,
+						   struct gnix_fid_ep,
+						   ep_fid);
+
+	/* A little arbitrary... */
+	if (ep_priv->htd_pool.enabled == false) {
+		return -FI_EOPBADSTATE;
+	}
 
 	switch (ep->fid.fclass) {
 	case FI_CLASS_EP:
@@ -2420,8 +2487,8 @@ DIRECT_FN STATIC ssize_t gnix_ep_tx_size_left(struct fid_ep *ep)
 		return -FI_EINVAL;
 	}
 
-	/* We can queue TXs indefinitely, return an arbitrary low water mark. */
-	return 64;
+	/* We can queue TXs indefinitely, so just return the default size. */
+	return GNIX_TX_SIZE_DEFAULT;
 }
 
 __attribute__((unused))

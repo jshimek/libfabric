@@ -96,7 +96,7 @@ static int fi_ibv_rdm_tagged_getname(fid_t fid, void *addr, size_t * addrlen)
 		return -FI_ETOOSMALL;
 	}
 	memset(addr, 0, *addrlen);
-	memcpy(addr, &ep->cm.my_addr, FI_IBV_RDM_DFLT_ADDRLEN);
+	memcpy(addr, &ep->my_addr, FI_IBV_RDM_DFLT_ADDRLEN);
 	ep->addrlen = *addrlen;
 
 	return 0;
@@ -180,7 +180,7 @@ fi_ibv_rdm_tagged_recvmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged *msg
 	if (flags & FI_PEEK) {
 		recv_data.peek_data.flags |= FI_COMPLETION;
 		ret = fi_ibv_rdm_req_hndl(request, FI_IBV_EVENT_RECV_PEEK,
-					  &recv_data.peek_data);
+					  &recv_data);
 		if (ret == -FI_ENOMSG) {
 			fi_ibv_rdm_tagged_poll(ep_rdm);
 		}
@@ -673,7 +673,7 @@ fi_ibv_rdm_process_recv_wc(struct fi_ibv_rdm_ep *ep, struct ibv_wc *wc)
 
 static inline int fi_ibv_rdm_tagged_poll_recv(struct fi_ibv_rdm_ep *ep)
 {
-	const int wc_count = ep->n_buffs; /* TODO: to set from upper level */
+	const int wc_count = ep->fi_rcq->read_bunch_size;
 	struct ibv_wc wc[wc_count];
 	int ret = 0;
 	int err = 0;
@@ -750,7 +750,7 @@ fi_ibv_rdm_process_send_wc(struct fi_ibv_rdm_ep *ep, struct ibv_wc *wc)
 
 static inline int fi_ibv_rdm_tagged_poll_send(struct fi_ibv_rdm_ep *ep)
 {
-	const int wc_count = ep->n_buffs;
+	const int wc_count = ep->fi_scq->read_bunch_size;
 	struct ibv_wc wc[wc_count];
 	int ret = 0;
 	int err = 0;

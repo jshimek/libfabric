@@ -36,6 +36,40 @@
 
 #include "fi_verbs.h"
 
+static uint64_t fi_ibv_comp_flags(struct ibv_wc *wc)
+{
+	uint64_t flags = 0;
+
+	if (wc->wc_flags & IBV_WC_WITH_IMM)
+		flags |= FI_REMOTE_CQ_DATA;
+
+	switch (wc->opcode) {
+	case IBV_WC_SEND:
+		flags |= FI_SEND | FI_MSG;
+		break;
+	case IBV_WC_RDMA_WRITE:
+		flags |= FI_RMA | FI_WRITE;
+		break;
+	case IBV_WC_RDMA_READ:
+		flags |= FI_RMA | FI_READ;
+		break;
+	case IBV_WC_COMP_SWAP:
+		flags |= FI_ATOMIC;
+		break;
+	case IBV_WC_FETCH_ADD:
+		flags |= FI_ATOMIC;
+		break;
+	case IBV_WC_RECV:
+		flags |= FI_RECV | FI_MSG;
+		break;
+	case IBV_WC_RECV_RDMA_WITH_IMM:
+		flags |= FI_RMA | FI_REMOTE_WRITE;
+		break;
+	default:
+		break;
+	}
+	return flags;
+}
 
 static ssize_t
 fi_ibv_cq_readerr(struct fid_cq *cq_fid, struct fi_cq_err_entry *entry,
@@ -61,7 +95,7 @@ fi_ibv_cq_readerr(struct fid_cq *cq_fid, struct fi_cq_err_entry *entry,
 	wce = container_of(slist_entry, struct fi_ibv_wce, entry);
 
 	entry->op_context = (void *) (uintptr_t) wce->wc.wr_id;
-	entry->flags = 0;
+	entry->flags = fi_ibv_comp_flags(&wce->wc);
 	entry->err = EIO;
 	entry->prov_errno = wce->wc.status;
 	memcpy(&entry->err_data, &wce->wc.vendor_err,
@@ -153,41 +187,6 @@ fi_ibv_cq_sread(struct fid_cq *cq, void *buf, size_t count, const void *cond,
 	}
 
 	return cur ? cur : ret;
-}
-
-static uint64_t fi_ibv_comp_flags(struct ibv_wc *wc)
-{
-	uint64_t flags = 0;
-
-	if (wc->wc_flags & IBV_WC_WITH_IMM)
-		flags |= FI_REMOTE_CQ_DATA;
-
-	switch (wc->opcode) {
-	case IBV_WC_SEND:
-		flags |= FI_SEND | FI_MSG;
-		break;
-	case IBV_WC_RDMA_WRITE:
-		flags |= FI_RMA | FI_WRITE;
-		break;
-	case IBV_WC_RDMA_READ:
-		flags |= FI_RMA | FI_READ;
-		break;
-	case IBV_WC_COMP_SWAP:
-		flags |= FI_ATOMIC;
-		break;
-	case IBV_WC_FETCH_ADD:
-		flags |= FI_ATOMIC;
-		break;
-	case IBV_WC_RECV:
-		flags |= FI_RECV | FI_MSG;
-		break;
-	case IBV_WC_RECV_RDMA_WITH_IMM:
-		flags |= FI_RMA | FI_REMOTE_WRITE;
-		break;
-	default:
-		break;
-	}
-	return flags;
 }
 
 static void fi_ibv_cq_read_context_entry(struct ibv_wc *wc, int i, void *buf)
@@ -494,6 +493,7 @@ int fi_ibv_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 {
 	struct fi_ibv_cq *_cq;
 	int ep_cnt_bits = 0;
+	size_t size;
 	int ret;
 
 	_cq = calloc(1, sizeof *_cq);
@@ -501,7 +501,7 @@ int fi_ibv_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		return -FI_ENOMEM;
 
 	_cq->domain = container_of(domain, struct fi_ibv_domain, domain_fid);
-	/* 
+	/*
 	 * RDM functionality is moved to correspond separated functions
 	 */
 	assert(!_cq->domain->rdm);
@@ -512,6 +512,8 @@ int fi_ibv_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		_cq->channel = ibv_create_comp_channel(_cq->domain->verbs);
 		if (!_cq->channel) {
 			ret = -errno;
+			FI_WARN(&fi_ibv_prov, FI_LOG_CQ,
+					"Unable to create completion channel\n");
 			goto err1;
 		}
 
@@ -536,11 +538,15 @@ int fi_ibv_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		goto err3;
 	}
 
-	_cq->cq = ibv_create_cq(_cq->domain->verbs, attr->size, _cq,
-				_cq->channel, attr->signaling_vector);
+	size = attr->size ? attr->size :
+		MIN(VERBS_DEF_CQ_SIZE, _cq->domain->info->domain_attr->cq_cnt);
+
+	_cq->cq = ibv_create_cq(_cq->domain->verbs, size, _cq, _cq->channel,
+			attr->signaling_vector);
 
 	if (!_cq->cq) {
 		ret = -errno;
+		FI_WARN(&fi_ibv_prov, FI_LOG_CQ, "Unable to create verbs CQ\n");
 		goto err3;
 	}
 
@@ -561,6 +567,7 @@ int fi_ibv_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 	_cq->cq_fid.ops = &fi_ibv_cq_ops;
 
 	switch (attr->format) {
+	case FI_CQ_FORMAT_UNSPEC:
 	case FI_CQ_FORMAT_CONTEXT:
 		_cq->read_entry = fi_ibv_cq_read_context_entry;
 		_cq->entry_size = sizeof(struct fi_cq_entry);
