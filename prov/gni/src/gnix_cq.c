@@ -178,10 +178,10 @@ static int verify_cq_attr(struct fi_cq_attr *attr, struct fi_ops_cq *ops,
 		}
 		break;
 	case FI_WAIT_UNSPEC:
-		attr->wait_obj = FI_WAIT_FD;
+		attr->wait_obj = FI_WAIT_UNSPEC;
+		break;
 	case FI_WAIT_FD:
 	case FI_WAIT_MUTEX_COND:
-		break;
 	default:
 		GNIX_WARN(FI_LOG_CQ, "wait type: %d unsupported.\n",
 			  attr->wait_obj);
@@ -203,6 +203,7 @@ static int gnix_cq_set_wait(struct gnix_fid_cq *cq)
 	};
 
 	switch (cq->attr.wait_obj) {
+	case FI_WAIT_UNSPEC:
 	case FI_WAIT_FD:
 	case FI_WAIT_MUTEX_COND:
 		ret = gnix_wait_open(&cq->domain->fabric->fab_fid,

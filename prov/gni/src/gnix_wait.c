@@ -30,10 +30,217 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-
+#include <stdlib.h>
+#include <signal.h>
 #include "gnix.h"
 #include "gnix_wait.h"
 
+/*******************************************************************************
+ * Lets create some threads for progress functions, if FI_PROGRESS AUTO is enabled
+ * we don't need to do this, in reality we are using the same functions we just
+ * don't want to have to pass weird amounts of information to the function, easier
+ * to spawn the thing and cancel it than do other things.
+ */
+
+static pthread_t	gnix_wait_thread;
+static pthread_mutex_t	gnix_wait_mutex;
+static pthread_cond_t	gnix_wait_cond;
+static volatile int	gnix_wait_thread_ready = 0;
+static volatile int 	gnix_wait_thread_enabled = 0;
+static volatile int	gnix_wait_thread_busy = 0;
+
+
+/*
+ * this function is intended to be invoked as an argument to pthread_create,
+ */
+static void *__gnix_nic_prog_thread_fn(void *the_arg)
+{
+	int ret = FI_SUCCESS, prev_state;
+	int retry = 0;
+	uint32_t which;
+	struct gnix_nic *nic = (struct gnix_nic *)the_arg;
+	sigset_t  sigmask;
+	gni_cq_handle_t cqv[2];
+	gni_return_t status;
+	gni_cq_entry_t cqe;
+
+	GNIX_TRACE(FI_LOG_EP_CTRL, "\n");
+
+	/*
+	 * temporarily disable cancelability while we set up
+	 * some stuff
+	 */
+
+	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &prev_state);
+
+	/*
+	 * help out Cray core-spec, say we're not an app thread
+	 * and can be run on core-spec cpus.
+	 */
+
+	ret = _gnix_task_is_not_app();
+	if (ret)
+		GNIX_WARN(FI_LOG_EP_CTRL,
+			"_gnix_task_is_not_app call returned %d\n",
+			ret);
+
+	/*
+	 * block all signals, don't want this thread to catch
+	 * signals that may be for app threads
+	 */
+
+	memset(&sigmask, 0, sizeof(sigset_t));
+	ret = sigfillset(&sigmask);
+	if (ret) {
+		GNIX_WARN(FI_LOG_EP_CTRL,
+		"sigfillset call returned %d\n", ret);
+	} else {
+
+		ret = pthread_sigmask(SIG_SETMASK,
+					&sigmask, NULL);
+		if (ret)
+			GNIX_WARN(FI_LOG_EP_CTRL,
+			"pthread_sigmask call returned %d\n", ret);
+	}
+
+	/*
+	 * okay now we're ready to be cancelable.
+	 */
+
+	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &prev_state);
+
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+
+	cqv[0] = nic->tx_cq_blk;
+	cqv[1] = nic->rx_cq_blk;
+
+try_again:
+
+	// We need to go to sleep here and only wake up if in AUTO_PROGRESS
+	// or our we are in a fi_wait function
+
+	status = GNI_CqVectorMonitor(cqv,
+				     2,
+				     -1,
+				     &which);
+
+	switch (status) {
+	case GNI_RC_SUCCESS:
+
+		/*
+		 * first dequeue RX CQEs
+		 */
+		if (which == 1) {
+			do {
+				status = GNI_CqGetEvent(nic->rx_cq_blk,
+							&cqe);
+			} while (status == GNI_RC_SUCCESS);
+		}
+		_gnix_nic_progress(nic);
+		retry = 1;
+		break;
+	case GNI_RC_TIMEOUT:
+		retry = 1;
+		break;
+	case GNI_RC_NOT_DONE:
+		retry = 1;
+		break;
+	case GNI_RC_INVALID_PARAM:
+	case GNI_RC_INVALID_STATE:
+	case GNI_RC_ERROR_RESOURCE:
+	case GNI_RC_ERROR_NOMEM:
+		retry = 0;
+		GNIX_WARN(FI_LOG_EP_CTRL,
+			  "GNI_CqGetEvent returned %s\n",
+			  gni_err_str[status]);
+		break;
+	default:
+		retry = 0;
+		GNIX_WARN(FI_LOG_EP_CTRL,
+			  "GNI_CqGetEvent returned unexpected code %s\n",
+			  gni_err_str[status]);
+		break;
+	}
+
+	if (retry)
+		goto try_again;
+
+	return NULL;
+}
+
+/*
+static void *gnix_wait_progress(void *args)
+	struct gnix_fid_domain *domain = args;
+	gnix_wait_thread_ready = 1;
+	pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+
+	while (1) {
+		pthread_mutex_lock(&gnix_wait_mutex);
+		if (!gnix_wait_thread_enabled)
+			pthread_cond_wait(&gnix_wait_ond, &gnix_wait_mutex);
+		pthread_mutex_unlock(&gnix_wait_mutex);
+		pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+
+		gnix_wait_thread_busy = 1;
+		while (gnix_wait_thread_enabled)
+			// Progress the current domain
+
+		gnix_wait_thread_busy = 0;
+
+		pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+	}
+
+	return NULL;
+}
+*/
+static void gnix_wait_start_progress(struct gnix_fid_domain *domain)
+{
+	int ret;
+	struct gnix_nic *p, *next;
+
+	if (!domain)
+		return;
+
+	if (domain->data_progress == FI_PROGRESS_AUTO) {
+		GNIX_WARN(WAIT_SUB, "Data Progress is enabled on this domain\n");
+		return;
+	}
+	if (!gnix_wait_thread) {
+		pthread_mutex_init(&gnix_wait_mutex, NULL);
+		pthread_cond_init(&gnix_wait_cond, NULL);
+		ret = _gnix_job_disable_affinity_apply();
+		if (ret != 0)
+			GNIX_WARN(WAIT_SUB, "_gnix_job_disable call returned %d\n", ret);
+			
+		dlist_for_each_safe(&domain->nic_list, p, next, dom_nic_list) {
+			ret = pthread_create(&p->progress_thread,
+						NULL,
+						__gnix_nic_prog_thread_fn,
+						(void *) p);
+			if (ret)
+				GNIX_WARN(WAIT_SUB, "pthread_create call returned %d\n", ret);
+		}
+	}
+}
+
+static void gnix_wait_stop_progress(struct gnix_fid_domain *domain)
+{
+	int ret;
+	struct gnix_nic *p, *next;
+	if (domain->data_progress == FI_PROGRESS_AUTO)
+		return;
+
+	dlist_for_each_safe(&domain->nic_list, p, next, dom_nic_list) {
+		if (p->progress_thread) {
+			ret = pthread_cancel(p->progress_thread);
+			ret = pthread_join(p->progress_thread, NULL);
+			p->progress_thread = 0;
+		}
+	}
+	return;
+}
+	
 /*******************************************************************************
  * Forward declarations for FI_OPS_* structures.
  ******************************************************************************/
@@ -148,12 +355,10 @@ void _gnix_signal_wait_obj(struct fid_wait *wait)
 	wait_priv = container_of(wait, struct gnix_fid_wait, wait);
 
 	switch (wait_priv->type) {
-	case FI_WAIT_FD:
+	case FI_WAIT_UNSPEC:
+		GNIX_TRACE(WAIT_SUB,"The Read FD is %d Write is %d\n", wait_priv->fd[WAIT_READ], wait_priv->fd[WAIT_WRITE]);		
 		if (write(wait_priv->fd[WAIT_WRITE], &msg, len) != len)
 			GNIX_WARN(WAIT_SUB, "failed to signal wait object.\n");
-		break;
-	case FI_WAIT_MUTEX_COND:
-		pthread_cond_signal(&wait_priv->cond);
 		break;
 	default:
 		GNIX_WARN(WAIT_SUB,
@@ -175,9 +380,7 @@ static int gnix_verify_wait_attr(struct fi_wait_attr *attr)
 
 	switch (attr->wait_obj) {
 	case FI_WAIT_UNSPEC:
-		attr->wait_obj = FI_WAIT_FD;
-	case FI_WAIT_FD:
-	case FI_WAIT_MUTEX_COND:
+		attr->wait_obj = FI_WAIT_UNSPEC;
 		break;
 	default:
 		GNIX_WARN(WAIT_SUB, "wait type: %d not supported.\n",
@@ -195,16 +398,12 @@ static int gnix_init_wait_obj(struct gnix_fid_wait *wait, enum fi_wait_obj type)
 	wait->type = type;
 
 	switch (type) {
-	case FI_WAIT_FD:
+	case FI_WAIT_UNSPEC:
 		if (socketpair(AF_LOCAL, SOCK_STREAM, 0, wait->fd))
 			goto err;
 
 		if (fi_fd_nonblock(wait->fd[WAIT_READ]))
 			goto cleanup;
-		break;
-	case FI_WAIT_MUTEX_COND:
-		pthread_mutex_init(&wait->mutex, NULL);
-		pthread_cond_init(&wait->cond, NULL);
 		break;
 	default:
 		GNIX_WARN(WAIT_SUB, "Invalid wait type: %d\n",
@@ -227,18 +426,17 @@ err:
  ******************************************************************************/
 static int gnix_wait_control(struct fid *wait, int command, void *arg)
 {
-	/* disabled until new trywait interface is implemented
 	struct fid_wait *wait_fid_priv;
 
 	GNIX_TRACE(WAIT_SUB, "\n");
 
 	wait_fid_priv = container_of(wait, struct fid_wait, fid);
-	*/
+	
 
 	switch (command) {
 	case FI_GETWAIT:
-		/* return _gnix_get_wait_obj(wait_fid_priv, arg); */
 		return -FI_ENOSYS;
+//		return _gnix_get_wait_obj(wait_fid_priv, arg);
 	default:
 		return -FI_EINVAL;
 	}
@@ -256,7 +454,47 @@ static int gnix_wait_control(struct fid *wait, int command, void *arg)
  */
 DIRECT_FN int gnix_wait_wait(struct fid_wait *wait, int timeout)
 {
-	return -FI_ENOSYS;
+	int err = 0, ret;
+	char c;
+//	GNIX_WARN(WAIT_SUB,
+//			"Not Implemented at all as of yet.\n");
+	struct gnix_fid_wait *wait_priv;
+	struct gnix_fid_fabric *fabric; 
+	GNIX_TRACE(WAIT_SUB, "\n");
+
+	wait_priv = container_of(wait, struct gnix_fid_wait, wait.fid);
+	fabric = wait_priv->fabric;
+	/* Everything below is fine and dandy if we can get the system to auto-progress
+	 * but without auto-progression this does nothing
+	 */	
+
+	
+
+	switch (wait_priv->type) {
+	case FI_WAIT_UNSPEC:
+		GNIX_TRACE(WAIT_SUB, "Calling fi_poll_fd %d\n", wait_priv->fd[WAIT_READ]);
+		err = fi_poll_fd(wait_priv->fd[WAIT_READ], timeout);
+		GNIX_TRACE(WAIT_SUB, "Return code from poll was %d\n", err);
+		if (err == 0) {
+			err = -FI_ETIMEDOUT;
+		} else {
+			while (err > 0) {
+				ret = ofi_read_socket(wait_priv->fd[WAIT_READ], &c, 1);
+				GNIX_TRACE(WAIT_SUB, "ret is %d C is %c\n", ret, c);
+				if (ret != 1) {
+					GNIX_ERR(WAIT_SUB, "failed to read wait_fd\n");
+					err = 0;
+					break;
+				} else
+					err--;
+				}
+			}
+		break;
+	default:
+		GNIX_WARN(WAIT_SUB,"Invalid wait object type\n");
+		return -FI_EINVAL;
+	}
+	return err;
 }
 
 int gnix_wait_close(struct fid *wait)

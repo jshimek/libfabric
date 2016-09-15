@@ -61,6 +61,7 @@ static int gnix_eq_set_wait(struct gnix_fid_eq *eq)
 	};
 
 	switch (eq->attr.wait_obj) {
+	case FI_WAIT_UNSPEC:
 	case FI_WAIT_FD:
 	case FI_WAIT_MUTEX_COND:
 		ret = gnix_wait_open(&eq->fabric->fab_fid, &requested,
@@ -106,11 +107,10 @@ static int gnix_verify_eq_attr(struct fi_eq_attr *attr)
 		}
 		break;
 	case FI_WAIT_UNSPEC:
-		attr->wait_obj = FI_WAIT_FD;
+		attr->wait_obj = FI_WAIT_UNSPEC;
 		break;
 	case FI_WAIT_FD:
 	case FI_WAIT_MUTEX_COND:
-		break;
 	default:
 		GNIX_WARN(FI_LOG_EQ, "wait type: %d unsupported.\n",
 			  attr->wait_obj);
@@ -411,15 +411,16 @@ DIRECT_FN STATIC ssize_t gnix_eq_sread(struct fid_eq *eq, uint32_t *event,
 
 DIRECT_FN STATIC int gnix_eq_control(struct fid *eq, int command, void *arg)
 {
-	/* disabled until new trywait interface is implemented
+//	 disabled until new trywait interface is implemented
 	struct gnix_fid_eq *eq_priv;
 
 	eq_priv = container_of(eq, struct gnix_fid_eq, eq_fid);
-	*/
 
 	switch (command) {
 	case FI_GETWAIT:
-		/* return _gnix_get_wait_obj(eq_priv->wait, arg); */
+/*		if (eq_priv->wait)
+			return _gnix_get_wait_obj(eq_priv->wait, arg); 
+		else*/
 		return -FI_ENOSYS;
 	default:
 		return -FI_EINVAL;

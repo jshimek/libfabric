@@ -528,7 +528,7 @@ Test(cq_wait_obj, none, .init = cq_wait_none_setup)
 
 Test(cq_wait_obj, unspec, .init = cq_wait_unspec_setup, .disabled = true)
 {
-	cr_expect_eq(wait_priv->type, FI_WAIT_FD);
+	cr_expect_eq(wait_priv->type, FI_WAIT_UNSPEC);
 	cr_expect_eq(wait_priv->type, cq_priv->attr.wait_obj);
 	cr_expect_eq(wait_priv->type, cq_attr.wait_obj);
 	cr_expect_eq(&wait_priv->fabric->fab_fid, fab);
@@ -573,7 +573,8 @@ Test(cq_wait_control, unspec, .init = cq_wait_unspec_setup, .disabled = true)
 	cr_expect_eq(wait_priv->fd[WAIT_READ], fd);
 }
 
-Test(cq_wait_control, fd, .init = cq_wait_fd_setup)
+Test(cq_wait_control, fd, .init = cq_wait_fd_setup,
+	.disabled = true)
 {
 	int ret;
 	int fd;
@@ -584,7 +585,8 @@ Test(cq_wait_control, fd, .init = cq_wait_fd_setup)
 	cr_expect_eq(wait_priv->fd[WAIT_READ], fd);
 }
 
-Test(cq_wait_control, mutex_cond, .init = cq_wait_mutex_cond_setup)
+Test(cq_wait_control, mutex_cond, .init = cq_wait_mutex_cond_setup,
+	.disabled = true)
 {
 	int ret;
 	struct fi_mutex_cond mutex_cond;

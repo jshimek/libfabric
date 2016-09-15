@@ -85,7 +85,23 @@ const struct fi_fabric_attr gnix_fabric_attr = {
 
 DIRECT_FN int gnix_fabric_trywait(struct fid_fabric *fabric, struct fid **fids, int count)
 {
-	return -FI_ENOSYS;
+	return -ENOSYS;
+
+/*
+	for (i = 0; i < count; i++) {
+		assert(fids[i]);
+
+		switch (fids[i]->fclass) {
+		case FI_CLASS_EQ:
+			continue;
+		case FI_CLASS_CQ:
+			ret = gnix_cq_trywait(fids[i]);		
+		case FI_CLASS_WAIT:
+			ret = gnix_wait_trywait(fids[i]);
+			break;
+		default:
+			GNIX_
+*/
 }
 
 static struct fi_ops_fabric gnix_fab_ops = {

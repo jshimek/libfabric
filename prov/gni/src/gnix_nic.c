@@ -132,6 +132,10 @@ static void *__gnix_nic_prog_thread_fn(void *the_arg)
 	cqv[1] = nic->rx_cq_blk;
 
 try_again:
+
+	// We need to go to sleep here and only wake up if in AUTO_PROGRESS
+	// or our we are in a fi_wait function
+
 	status = GNI_CqVectorMonitor(cqv,
 				     2,
 				     -1,

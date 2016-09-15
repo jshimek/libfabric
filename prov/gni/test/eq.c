@@ -240,14 +240,15 @@ Test(eq_wait_obj, none, .init = eq_wait_none_setup)
 
 Test(eq_wait_obj, unspec, .init = eq_wait_unspec_setup)
 {
-	cr_expect_eq(wait_priv->type, FI_WAIT_FD);
+	cr_expect_eq(wait_priv->type, FI_WAIT_UNSPEC);
 	cr_expect_eq(wait_priv->type, eq_priv->attr.wait_obj);
 	cr_expect_eq(wait_priv->type, eq_attr.wait_obj);
 	cr_expect_eq(&wait_priv->fabric->fab_fid, fab);
 	cr_expect_eq(wait_priv->cond_type, FI_CQ_COND_NONE);
 }
 
-Test(eq_wait_obj, fd, .init = eq_wait_fd_setup)
+Test(eq_wait_obj, fd, .init = eq_wait_fd_setup,
+	.disabled =  true)
 {
 	cr_expect_eq(wait_priv->type, FI_WAIT_FD);
 	cr_expect_eq(wait_priv->type, eq_priv->attr.wait_obj);
@@ -256,7 +257,8 @@ Test(eq_wait_obj, fd, .init = eq_wait_fd_setup)
 	cr_expect_eq(wait_priv->cond_type, FI_CQ_COND_NONE);
 }
 
-Test(eq_wait_obj, mutex_cond, .init = eq_wait_mutex_cond_setup)
+Test(eq_wait_obj, mutex_cond, .init = eq_wait_mutex_cond_setup,
+	.disabled = true)
 {
 	cr_expect_eq(wait_priv->type, FI_WAIT_MUTEX_COND);
 	cr_expect_eq(wait_priv->type, eq_priv->attr.wait_obj);
