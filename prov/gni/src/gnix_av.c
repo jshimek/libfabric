@@ -66,7 +66,7 @@ static struct fi_ops gnix_fi_av_ops;
  * Helper functions.
  ******************************************************************************/
 /*
- * TODO: Check for named AV creation and check RX CTX bits.
+ * TODO: Check RX CTX bits.
  */
 static int gnix_verify_av_attr(struct fi_av_attr *attr)
 {
@@ -75,10 +75,15 @@ static int gnix_verify_av_attr(struct fi_av_attr *attr)
 	switch (attr->type) {
 	case FI_AV_TABLE:
 	case FI_AV_MAP:
+	case FI_AV_UNSPEC:
 		break;
 	default:
 		ret = -FI_EINVAL;
 		break;
+	}
+
+	if (attr->name != NULL) {
+		ret = -FI_ENOSYS;
 	}
 
 	return ret;
@@ -758,12 +763,14 @@ DIRECT_FN int gnix_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
 	}
 
 	if (attr) {
-		if (gnix_verify_av_attr(attr)) {
-			ret = -FI_EINVAL;
+		ret = gnix_verify_av_attr(attr);
+		if (ret) {
 			goto cleanup;
 		}
 
-		type = attr->type;
+		if (attr->type != FI_AV_UNSPEC) {
+			type = attr->type;
+		}
 		count = attr->count;
 	}
 

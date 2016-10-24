@@ -56,16 +56,17 @@ static ssize_t fi_ibv_rdm_tagged_cq_readfrom(struct fid_cq *cq, void *buf,
 	struct fi_ibv_rdm_request *cq_entry;
 	size_t ret = 0;
 
-	for (cq_entry = count ? fi_ibv_rdm_take_first_from_cq() : NULL;
+	for (cq_entry = count ? fi_ibv_rdm_take_first_from_cq(_cq) : NULL;
 	     cq_entry;
-	     cq_entry = (ret < count) ? fi_ibv_rdm_take_first_from_cq() : NULL)
+	     cq_entry = (ret < count) ? fi_ibv_rdm_take_first_from_cq(_cq) : NULL)
 	{
 		FI_DBG(&fi_ibv_prov, FI_LOG_CQ,
 			"\t\t-> found in ready: %p op_ctx %p, len %lu, tag 0x%llx\n",
 			cq_entry, cq_entry->context, cq_entry->len,
 			cq_entry->minfo.tag);
 
-		src_addr[ret] = (fi_addr_t) (uintptr_t) cq_entry->minfo.conn;
+		src_addr[ret] =
+			_cq->ep->av->conn_to_addr(_cq->ep, cq_entry->minfo.conn);
 		entry[ret].op_context = cq_entry->context;
 		entry[ret].flags = (cq_entry->comp_flags & ~FI_COMPLETION);
 		entry[ret].len = cq_entry->len;
@@ -87,12 +88,12 @@ static ssize_t fi_ibv_rdm_tagged_cq_readfrom(struct fid_cq *cq, void *buf,
 			VERBS_INFO(FI_LOG_CQ, "fi_ibv_rdm_tagged_poll failed\n");
 		}
 
-		if (!dlist_empty(&fi_ibv_rdm_comp_queue.request_errcq)) {
+		if (!dlist_empty(&_cq->request_errcq)) {
 			ret = -FI_EAVAIL;
 		}
 	}
 
-	return ret;
+	return !ret ? -FI_EAGAIN : ret;
 }
 
 static ssize_t fi_ibv_rdm_tagged_cq_read(struct fid_cq *cq, void *buf,
@@ -179,12 +180,15 @@ fi_ibv_rdm_cq_strerror(struct fid_cq *eq, int prov_errno, const void *err_data,
 }
 
 static ssize_t
-fi_ibv_rdm_cq_readerr(struct fid_cq *cq, struct fi_cq_err_entry *entry,
+fi_ibv_rdm_cq_readerr(struct fid_cq *cq_fid, struct fi_cq_err_entry *entry,
                              uint64_t flags)
 {
 	ssize_t ret = 0;
+	struct fi_ibv_rdm_cq *cq =
+		container_of(cq_fid, struct fi_ibv_rdm_cq, cq_fid.fid);
+
 	struct fi_ibv_rdm_request *err_request = 
-		fi_ibv_rdm_take_first_from_errcq();
+		fi_ibv_rdm_take_first_from_errcq(cq);
 
 	if (err_request) {
 		entry->op_context = err_request->context;
@@ -260,6 +264,7 @@ int fi_ibv_rdm_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		return -FI_ENOMEM;
 
 	_cq->domain = container_of(domain, struct fi_ibv_domain, domain_fid);
+	assert(_cq->domain->rdm);
 
 	switch (attr->wait_obj) {
 	case FI_WAIT_NONE:
@@ -282,13 +287,11 @@ int fi_ibv_rdm_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 	_cq->cq_fid.ops = &fi_ibv_rdm_cq_ops;
 
 	switch (attr->format) {
+	case FI_CQ_FORMAT_UNSPEC:
 	case FI_CQ_FORMAT_CONTEXT:
 	case FI_CQ_FORMAT_MSG:
 	case FI_CQ_FORMAT_DATA:
-		assert(0);
-		break;
 	case FI_CQ_FORMAT_TAGGED:
-		assert(_cq->domain->rdm);
 		_cq->entry_size = sizeof(struct fi_cq_tagged_entry);
 		break;
 	default:
@@ -296,8 +299,8 @@ int fi_ibv_rdm_cq_open(struct fid_domain *domain, struct fi_cq_attr *attr,
 		goto err;
 	}
 
-	dlist_init(&fi_ibv_rdm_comp_queue.request_cq);
-	dlist_init(&fi_ibv_rdm_comp_queue.request_errcq);
+	dlist_init(&_cq->request_cq);
+	dlist_init(&_cq->request_errcq);
 
 	_cq->read_bunch_size = FI_IBV_RDM_DFLT_CQREAD_BUNCH_SIZE;
 	if (!fi_param_get_int(&fi_ibv_prov, "rdm_cqread_bunch_size", &param)) {

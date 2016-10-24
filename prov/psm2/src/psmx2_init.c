@@ -65,7 +65,8 @@ static int psmx2_getinfo(uint32_t version, const char *node,
 {
 	struct fi_info *psmx2_info;
 	uint32_t cnt = 0;
-	void *dest_addr = NULL;
+	struct psmx2_ep_name *dest_addr = NULL;
+	struct psmx2_src_name *src_addr;
 	int ep_type = FI_EP_RDM;
 	int av_type = FI_AV_UNSPEC;
 	uint64_t mode = FI_CONTEXT;
@@ -76,12 +77,18 @@ static int psmx2_getinfo(uint32_t version, const char *node,
 	uint64_t caps = PSMX2_CAPS;
 	uint64_t max_tag_value = -1ULL;
 	int err = -FI_ENODATA;
+	struct stat st;
 
 	FI_INFO(&psmx2_prov, FI_LOG_CORE,"\n");
 
 	*info = NULL;
 
-	if (psm2_ep_num_devunits(&cnt) || !cnt) {
+	/*
+	 * psm2_ep_num_devunits() may wait for 15 seconds before return
+	 * when /dev/hfi1_0 is not present. Check the existence of this
+	 * device first to avoid this delay.
+	 */
+	if (stat("/dev/hfi1_0", &st) || psm2_ep_num_devunits(&cnt) || !cnt) {
 		FI_INFO(&psmx2_prov, FI_LOG_CORE,
 			"no PSM device is found.\n");
 		return -FI_ENODATA;
@@ -89,17 +96,36 @@ static int psmx2_getinfo(uint32_t version, const char *node,
 
 	psmx2_init_env();
 
-	if (node && !(flags & FI_SOURCE)) {
-		dest_addr = psmx2_resolve_name(node, 0);
-		if (dest_addr) {
+	src_addr = calloc(1, sizeof(*src_addr));
+	if (!src_addr) {
+		FI_INFO(&psmx2_prov, FI_LOG_CORE,
+			"failed to allocate src addr.\n");
+		return -FI_ENODATA;
+	}
+	src_addr->unit = PSMX2_DEFAULT_UNIT;
+	src_addr->port = PSMX2_DEFAULT_PORT;
+	src_addr->service = PSMX2_DEFAULT_SERVICE;
+
+	if (node) {
+		if (flags & FI_SOURCE) {
+			sscanf(node, "%*[^:]:%d:%d", &src_addr->unit, &src_addr->port);
+			if (service)
+				sscanf(service, "%d", &src_addr->service);
 			FI_INFO(&psmx2_prov, FI_LOG_CORE,
-				"node '%s' resolved to <epid=0x%llx, vl=%d>\n", node,
-				((struct psmx2_ep_name *)dest_addr)->epid,
-				((struct psmx2_ep_name *)dest_addr)->vlane);
+				"node '%s' service '%s' converted to <unit=%d, port=%d, service=%d>\n",
+				node, service, src_addr->unit, src_addr->port, src_addr->service);
 		} else {
-			FI_INFO(&psmx2_prov, FI_LOG_CORE,
-				"failed to resolve node '%s'.\n", node);
-			return -FI_ENODATA;
+			dest_addr = psmx2_resolve_name(node, 0);
+			if (dest_addr) {
+				FI_INFO(&psmx2_prov, FI_LOG_CORE,
+					"node '%s' resolved to <epid=0x%llx, vl=%d>\n", node,
+					dest_addr->epid, dest_addr->vlane);
+			} else {
+				FI_INFO(&psmx2_prov, FI_LOG_CORE,
+					"failed to resolve node '%s'.\n", node);
+				err = -FI_ENODATA;
+				goto err_out;
+			}
 		}
 	}
 
@@ -415,7 +441,7 @@ static int psmx2_getinfo(uint32_t version, const char *node,
 	psmx2_info->domain_attr->ep_cnt = 65535;
 	psmx2_info->domain_attr->tx_ctx_cnt = 1;
 	psmx2_info->domain_attr->rx_ctx_cnt = 1;
-	psmx2_info->domain_attr->max_ep_tx_ctx = 65535;
+	psmx2_info->domain_attr->max_ep_tx_ctx = 1;
 	psmx2_info->domain_attr->max_ep_rx_ctx = 1;
 	psmx2_info->domain_attr->max_ep_stx_ctx = 65535;
 	psmx2_info->domain_attr->max_ep_srx_ctx = 0;
@@ -424,10 +450,10 @@ static int psmx2_getinfo(uint32_t version, const char *node,
 	psmx2_info->caps = caps;
 	psmx2_info->mode = mode;
 	psmx2_info->addr_format = FI_ADDR_PSMX;
-	psmx2_info->src_addrlen = 0;
-	psmx2_info->dest_addrlen = sizeof(struct psmx2_ep_name);
-	psmx2_info->src_addr = NULL;
+	psmx2_info->src_addr = src_addr;
+	psmx2_info->src_addrlen = sizeof(*src_addr);
 	psmx2_info->dest_addr = dest_addr;
+	psmx2_info->dest_addrlen = sizeof(*dest_addr);
 	psmx2_info->fabric_attr->name = strdup(PSMX2_FABRIC_NAME);
 	psmx2_info->fabric_attr->prov_name = NULL;
 	psmx2_info->fabric_attr->prov_version = PSMX2_VERSION;
@@ -457,8 +483,8 @@ static int psmx2_getinfo(uint32_t version, const char *node,
 	return 0;
 
 err_out:
-	if (dest_addr)
-		free(dest_addr);
+	free(dest_addr);
+	free(src_addr);
 
 	return err;
 }

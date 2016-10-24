@@ -41,8 +41,9 @@ fi_addr_t rxd_av_get_dg_addr(struct rxd_av *av, fi_addr_t fi_addr)
 
 fi_addr_t rxd_av_get_fi_addr(struct rxd_av *av, fi_addr_t dg_addr)
 {
-	return (fi_addr_t) ofi_av_lookup_index(&av->util_av,
-					      &dg_addr, (int) dg_addr);
+	int ret = ofi_av_lookup_index(&av->util_av,
+				      &dg_addr, (int) dg_addr);
+	return (ret == -FI_ENODATA) ? FI_ADDR_UNSPEC : ret;
 }
 
 int rxd_av_insert_dg_av(struct rxd_av *av, const void *addr)
@@ -86,10 +87,10 @@ out:
 	return ret;
 }
 
-size_t rxd_av_insert_check(struct rxd_av *av, const void *addr, size_t count,
-			   fi_addr_t *fi_addr, uint64_t flags, void *context)
+int rxd_av_insert_check(struct rxd_av *av, const void *addr, size_t count,
+			fi_addr_t *fi_addr, uint64_t flags, void *context)
 {
-	size_t i, success_cnt = 0;
+	int i, success_cnt = 0;
 	int ret, index;
 	void *curr_addr;
 	uint64_t dg_av_idx;
@@ -132,10 +133,10 @@ size_t rxd_av_insert_check(struct rxd_av *av, const void *addr, size_t count,
 	return ret;
 }
 
-size_t rxd_av_insert_fast(struct rxd_av *av, const void *addr, size_t count,
-			   fi_addr_t *fi_addr, uint64_t flags, void *context)
+int rxd_av_insert_fast(struct rxd_av *av, const void *addr, size_t count,
+		       fi_addr_t *fi_addr, uint64_t flags, void *context)
 {
-	size_t i, num, ret, success_cnt = 0;
+	int i, num, ret, success_cnt = 0;
 	int index;
 	fi_addr_t *fi_addrs;
 
@@ -286,7 +287,10 @@ int rxd_av_create(struct fid_domain *domain_fid, struct fi_av_attr *attr,
 	struct util_av_attr util_attr;
 	struct fi_av_attr av_attr;
 
-	if (attr && attr->name)
+	if (!attr)
+		return -FI_EINVAL;
+
+	if (attr->name)
 		return -FI_ENOSYS;
 
 	domain = container_of(domain_fid, struct rxd_domain, util_domain.domain_fid);
@@ -295,17 +299,19 @@ int rxd_av_create(struct fid_domain *domain_fid, struct fi_av_attr *attr,
 		return -FI_ENOMEM;
 
 	util_attr.addrlen = sizeof(fi_addr_t);
-	util_attr.overhead = attr ? attr->count : 0;
+	util_attr.overhead = attr->count;
 	util_attr.flags = FI_SOURCE;
-	av->size = attr ? attr->count : RXD_AV_DEF_COUNT;
+	av->size = attr->count ? attr->count : RXD_AV_DEF_COUNT;
+	if (attr->type == FI_AV_UNSPEC)
+		attr->type = FI_AV_TABLE;
+
 	ret = ofi_av_init(&domain->util_domain, attr, &util_attr,
 			 &av->util_av, context);
 	if (ret)
 		goto err1;
 
 	av->size = av->util_av.count;
-	if (attr)
-		av_attr = *attr;
+	av_attr = *attr;
 	av_attr.type = FI_AV_TABLE;
 	av_attr.count = 0;
 	av_attr.flags = 0;

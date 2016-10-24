@@ -32,6 +32,9 @@
 
 #include <fi_util.h>
 
+#include <ifaddrs.h>
+#include <net/if.h>
+
 #include "fi_verbs.h"
 #include "ep_rdm/verbs_rdm.h"
 
@@ -43,8 +46,8 @@
 #define VERBS_MSG_CAPS (FI_MSG | FI_RMA | FI_ATOMICS | FI_READ | FI_WRITE | \
 			FI_SEND | FI_RECV | FI_REMOTE_READ | FI_REMOTE_WRITE)
 
-#define VERBS_RDM_CAPS (FI_SEND | FI_RECV | FI_TAGGED | FI_RMA | FI_READ |  \
-			FI_WRITE | FI_REMOTE_READ | FI_REMOTE_WRITE)
+#define VERBS_RDM_CAPS (FI_MSG | FI_RMA | FI_TAGGED | FI_READ | FI_WRITE |	\
+			FI_RECV | FI_SEND | FI_REMOTE_READ | FI_REMOTE_WRITE )
 
 #define VERBS_MODE (FI_LOCAL_MR)
 #define VERBS_RDM_MODE (FI_CONTEXT)
@@ -325,6 +328,7 @@ int fi_ibv_check_rx_attr(const struct fi_rx_attr *attr,
 			 const struct fi_info *hints, const struct fi_info *info)
 {
 	uint64_t compare_mode, check_mode;
+	int rm_enabled;
 
 	if (attr->caps & ~(info->rx_attr->caps)) {
 		FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
@@ -361,7 +365,12 @@ int fi_ibv_check_rx_attr(const struct fi_rx_attr *attr,
 		return -FI_ENODATA;
 	}
 
-	if (attr->total_buffered_recv > info->rx_attr->total_buffered_recv) {
+	rm_enabled =(info->domain_attr &&
+		     info->domain_attr->resource_mgmt == FI_RM_ENABLED);
+
+	if (!rm_enabled &&
+	    (attr->total_buffered_recv > info->rx_attr->total_buffered_recv))
+	{
 		FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
 			"Given rx_attr->total_buffered_recv exceeds supported size\n");
 		return -FI_ENODATA;
@@ -745,16 +754,17 @@ static int fi_ibv_alloc_info(struct ibv_context *ctx, struct fi_info **info,
 		fi->tx_attr->iov_limit = 1;
 		fi->tx_attr->rma_iov_limit = 1;
 		if (!fi_param_get_int(&fi_ibv_prov, "rdm_buffer_size", &param)) {
-			if (param > sizeof (struct fi_ibv_rdm_tagged_rndv_header)) {
+			if (param > sizeof (struct fi_ibv_rdm_rndv_header)) {
 				fi->tx_attr->inject_size = param;
 			} else {
 				FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
 					"rdm_buffer_size too small, should be greater then %d\n",
-					sizeof (struct fi_ibv_rdm_tagged_rndv_header));
+					sizeof (struct fi_ibv_rdm_rndv_header));
 				ret = -FI_EINVAL;
 				goto err;
 			}
 		}
+		fi->domain_attr->resource_mgmt = FI_RM_ENABLED;
 	}
 
 	switch (ctx->device->transport_type) {
@@ -814,6 +824,94 @@ static int fi_ibv_alloc_info(struct ibv_context *ctx, struct fi_info **info,
 	return 0;
 err:
 	fi_freeinfo(fi);
+	return ret;
+}
+
+static int fi_ibv_copy_ifaddr(const char *name, const char *service, uint64_t flags,
+		struct fi_info *info)
+{
+	struct rdma_addrinfo *rai;
+	struct fi_info *fi;
+	struct rdma_cm_id *id;
+	int ret;
+
+	ret = fi_ibv_get_rdma_rai(name, service, flags, NULL, &rai);
+	if (ret) {
+		FI_WARN(&fi_ibv_prov, FI_LOG_FABRIC,
+				"rdma_getaddrinfo failed for name:%s\n", name);
+		return ret;
+	}
+	ret = rdma_create_ep(&id, rai, NULL, NULL);
+	if (!ret) {
+		for (fi = info; fi; fi = fi->next)
+			if (!strncmp(id->verbs->device->name, fi->domain_attr->name,
+						strlen(id->verbs->device->name)))
+				break;
+		if (!fi) {
+			FI_WARN(&fi_ibv_prov, FI_LOG_FABRIC,
+					"No matching fi_info for device: "
+					"%s with address: %s\n",
+					id->verbs->device->name, name);
+		} else {
+			if (fi->src_addr) {
+				free(fi->src_addr);
+				fi->src_addr = NULL;
+			}
+			fi_ibv_rai_to_fi(rai, fi);
+		}
+		rdma_destroy_ep(id);
+	}
+	rdma_freeaddrinfo(rai);
+	return 0;
+}
+
+static int fi_ibv_getifaddrs(const char *service, uint64_t flags, struct fi_info *info)
+{
+	struct ifaddrs *ifaddr, *ifa;
+	char name[INET6_ADDRSTRLEN];
+	const char *ret_ptr;
+	int ret, num_verbs_ifs = 0;
+
+	flags |= FI_NUMERICHOST | FI_SOURCE;
+
+	ret = getifaddrs(&ifaddr);
+	if (ret) {
+		FI_WARN(&fi_ibv_prov, FI_LOG_FABRIC,
+				"Unable to get interface addresses\n");
+		return ret;
+	}
+
+	for (ifa = ifaddr; ifa; ifa = ifa->ifa_next) {
+		if (!ifa->ifa_addr || !(ifa->ifa_flags & IFF_UP) ||
+				!strcmp(ifa->ifa_name, "lo"))
+			continue;
+		switch (ifa->ifa_addr->sa_family) {
+		case AF_INET:
+			ret_ptr = inet_ntop(AF_INET, &ofi_sin_addr(ifa->ifa_addr),
+				name, INET6_ADDRSTRLEN);
+			break;
+		case AF_INET6:
+			ret_ptr = inet_ntop(AF_INET6, &ofi_sin6_addr(ifa->ifa_addr),
+				name, INET6_ADDRSTRLEN);
+			break;
+		default:
+			continue;
+		}
+		if (!ret_ptr) {
+			FI_WARN(&fi_ibv_prov, FI_LOG_FABRIC,
+					"inet_ntop failed: %s(%d)\n",
+					strerror(errno), errno);
+			goto err;
+		}
+		ret = fi_ibv_copy_ifaddr(name, service, flags, info);
+		if (ret)
+			goto err;
+		num_verbs_ifs++;
+	}
+	freeifaddrs(ifaddr);
+	return num_verbs_ifs ? 0 : -FI_ENODATA;
+err:
+	freeifaddrs(ifaddr);
 	return ret;
 }
 
@@ -1002,6 +1100,15 @@ int fi_ibv_getinfo(uint32_t version, const char *node, const char *service,
 					       hints, rai, info);
 	} else {
 		ret = fi_ibv_get_matching_info(NULL, hints, rai, info);
+		if (!ret && !(flags & FI_SOURCE) && !node 
+                && (!hints || (!hints->src_addr && !hints->dest_addr))) {
+			ret = fi_ibv_getifaddrs(service, flags, *info);
+			if (ret) {
+				fi_freeinfo(*info);
+				fi_ibv_destroy_ep(rai, &id);
+				goto out;
+			}
+		}
 	}
 
 	ofi_alter_info(*info, hints);

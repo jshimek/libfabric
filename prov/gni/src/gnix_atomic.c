@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2015-2016 Cray Inc. All rights reserved.
- * Copyright (c) 2015 Los Alamos National Security, LLC. All rights reserved.
+ * Copyright (c) 2015-2016 Los Alamos National Security, LLC. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -60,11 +60,15 @@ static int __gnix_amo_send_err(struct gnix_fid_ep *ep,
 		}
 	}
 
-	if ((req->type == GNIX_FAB_RQ_AMO) &&
+	if (((req->type == GNIX_FAB_RQ_AMO) ||
+	     (req->type == GNIX_FAB_RQ_NAMO_AX) ||
+	     (req->type == GNIX_FAB_RQ_NAMO_AX_S)) &&
 	    ep->write_cntr) {
 		cntr = ep->write_cntr;
 	} else if ((req->type == GNIX_FAB_RQ_FAMO ||
-		    req->type == GNIX_FAB_RQ_CAMO) &&
+		    req->type == GNIX_FAB_RQ_CAMO ||
+		    req->type == GNIX_FAB_RQ_NAMO_FAX ||
+		    req->type == GNIX_FAB_RQ_NAMO_FAX_S) &&
 		   ep->read_cntr) {
 		cntr = ep->read_cntr;
 	}
@@ -95,11 +99,15 @@ static int __gnix_amo_send_completion(struct gnix_fid_ep *ep,
 		}
 	}
 
-	if ((req->type == GNIX_FAB_RQ_AMO) &&
+	if ((req->type == GNIX_FAB_RQ_AMO ||
+	     req->type == GNIX_FAB_RQ_NAMO_AX ||
+	     req->type == GNIX_FAB_RQ_NAMO_AX_S) &&
 	    ep->write_cntr) {
 		cntr = ep->write_cntr;
 	} else if ((req->type == GNIX_FAB_RQ_FAMO ||
-		    req->type == GNIX_FAB_RQ_CAMO) &&
+		    req->type == GNIX_FAB_RQ_CAMO ||
+		    req->type == GNIX_FAB_RQ_NAMO_FAX ||
+		    req->type == GNIX_FAB_RQ_NAMO_FAX_S) &&
 		   ep->read_cntr) {
 		cntr = ep->read_cntr;
 	}
@@ -509,10 +517,24 @@ ssize_t _gnix_atomic(struct gnix_fid_ep *ep,
 	void *loc_addr = NULL;
 	int dt_len, dt_align;
 
+	if (!(flags & FI_INJECT) && !ep->send_cq &&
+	    (((fr_type == GNIX_FAB_RQ_AMO ||
+	      fr_type == GNIX_FAB_RQ_NAMO_AX ||
+	      fr_type == GNIX_FAB_RQ_NAMO_AX_S) &&
+	      !ep->write_cntr) ||
+	     ((fr_type == GNIX_FAB_RQ_FAMO ||
+	      fr_type == GNIX_FAB_RQ_CAMO ||
+	      fr_type == GNIX_FAB_RQ_NAMO_FAX ||
+	      fr_type == GNIX_FAB_RQ_NAMO_FAX_S) &&
+	      !ep->read_cntr))) {
+		return -FI_ENOCQ;
+	}
+
+
 	if (!ep || !msg || !msg->msg_iov ||
 	    !msg->msg_iov[0].addr ||
 	    msg->msg_iov[0].count != 1 ||
-	    msg->iov_count != 1 ||
+	    msg->iov_count != GNIX_MAX_ATOMIC_IOV_LIMIT ||
 	    !msg->rma_iov || !msg->rma_iov[0].addr)
 		return -FI_EINVAL;
 
@@ -523,10 +545,6 @@ ssize_t _gnix_atomic(struct gnix_fid_ep *ep,
 		    (flags & FI_INJECT)) {
 			return -FI_EINVAL;
 		}
-	}
-
-	if (!ep->send_cq && !(flags & FI_INJECT)) {
-		return -FI_ENOCQ;
 	}
 
 	if (fr_type == GNIX_FAB_RQ_CAMO) {

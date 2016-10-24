@@ -86,26 +86,26 @@ int fi_ibv_rdm_cm_bind_ep(struct fi_ibv_rdm_cm *cm, struct fi_ibv_rdm_ep *ep)
 
 	VERBS_INFO(FI_LOG_EP_CTRL, "My IPoIB: %s\n", my_ipoib_addr_str);
 
-	if (rdma_bind_addr(cm->listener, (struct sockaddr *)&ep->my_addr)) {
-		VERBS_INFO(FI_LOG_EP_CTRL,
-			"Failed to bind cm listener to my IPoIB addr %s: %s\n",
-			my_ipoib_addr_str, strerror(errno));
-		return -FI_EOTHER;
+	if (!cm->is_bound) {
+		errno = 0;
+		if (rdma_bind_addr(cm->listener, (struct sockaddr *)&ep->my_addr)) {
+			VERBS_INFO(FI_LOG_EP_CTRL,
+				"Failed to bind cm listener to my IPoIB addr %s: %s\n",
+				my_ipoib_addr_str, strerror(errno));
+			return -FI_EOTHER;
+		}
+		if (rdma_listen(cm->listener, 1024)) {
+			VERBS_INFO(FI_LOG_EP_CTRL, "rdma_listen failed: %s\n",
+				strerror(errno));
+			return -FI_EOTHER;
+		}
+		cm->is_bound = 1;
 	}
 
 	if (!ep->my_addr.sin_port) {
 		ep->my_addr.sin_port = rdma_get_src_port(cm->listener);
 	}
 	assert(ep->my_addr.sin_family == AF_INET);
-
-	/* TODO:
-	 * check - should rdma_listen be called after binding every endpoint?
-	 */
-	if (rdma_listen(cm->listener, 1024)) {
-		VERBS_INFO(FI_LOG_EP_CTRL, "rdma_listen failed: %s\n",
-			strerror(errno));
-		return -FI_EOTHER;
-	}
 
 	VERBS_INFO(FI_LOG_EP_CTRL, "My ep_addr: %s:%u\n",
 		inet_ntoa(ep->my_addr.sin_addr), ntohs(ep->my_addr.sin_port));
@@ -393,6 +393,11 @@ VERBS_INI
 	fi_param_define(&fi_ibv_prov, "rdm_thread_timeout", FI_PARAM_INT,
 			"the wake up timeout of the helper thread (usec) "
 			"(default: 100)");
+	fi_param_define(&fi_ibv_prov, "rdm_eager_send_opcode", FI_PARAM_STRING,
+			"the operation code that will be used for eager messaging. "
+			"Only IBV_WR_SEND and IBV_WR_RDMA_WRITE_WITH_IMM are supported. "
+			"The last one is not applicable for iWarp. "
+			"(default: IBV_WR_SEND)");
 
 	return &fi_ibv_prov;
 }

@@ -36,10 +36,6 @@
 #ifndef _GNIX_H_
 #define _GNIX_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #if HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
@@ -118,8 +114,11 @@ extern "C" {
 #define compiler_barrier() asm volatile ("" ::: "memory")
 #endif
 
-#define GNIX_MAX_IOV_LIMIT 8
+#define GNIX_MAX_MSG_IOV_LIMIT 8
+#define GNIX_MAX_RMA_IOV_LIMIT 1
+#define GNIX_MAX_ATOMIC_IOV_LIMIT 1
 #define GNIX_ADDR_CACHE_SIZE 5
+
 /*
  * GNI GET alignment
  */
@@ -136,7 +135,7 @@ extern "C" {
  *
  * Note: "* 2" for head and tail
  */
-#define GNIX_HTD_BUF_SZ GNIX_MAX_IOV_LIMIT * GNI_READ_ALIGN * 2
+#define GNIX_HTD_BUF_SZ (GNIX_MAX_MSG_IOV_LIMIT * GNI_READ_ALIGN * 2)
 
 /*
  * Flags
@@ -154,7 +153,7 @@ extern "C" {
 
 #define GNIX_MSG_RENDEZVOUS		(1ULL << 61)	/* MSG only flag */
 #define GNIX_MSG_GET_TAIL		(1ULL << 62)	/* MSG only flag */
-#define LAST_FLAG			(1ULL << 63)	/* MSG only flag */
+#define GNIX_MSG_MULTI_RECV_SUP		(1ULL << 63)	/* MSG only flag */
 
 /*
  * Cray gni provider supported flags for fi_getinfo argument for now, needs
@@ -549,10 +548,13 @@ enum gnix_fab_req_type {
 	GNIX_FAB_RQ_AMO,
 	GNIX_FAB_RQ_FAMO,
 	GNIX_FAB_RQ_CAMO,
-	GNIX_FAB_RQ_NAMO_AX,
-	GNIX_FAB_RQ_NAMO_AX_S,
-	GNIX_FAB_RQ_NAMO_FAX,
-	GNIX_FAB_RQ_NAMO_FAX_S
+	GNIX_FAB_RQ_END_NON_NATIVE,
+	GNIX_FAB_RQ_START_NATIVE = GNIX_NAMO_AX,
+	GNIX_FAB_RQ_NAMO_AX = GNIX_NAMO_AX,
+	GNIX_FAB_RQ_NAMO_AX_S = GNIX_NAMO_AX_S,
+	GNIX_FAB_RQ_NAMO_FAX = GNIX_NAMO_FAX,
+	GNIX_FAB_RQ_NAMO_FAX_S = GNIX_NAMO_FAX_S,
+	GNIX_FAB_RQ_MAX_TYPES,
 };
 
 struct gnix_fab_req_rma {
@@ -575,8 +577,8 @@ struct gnix_fab_req_msg {
 		gni_mem_handle_t mem_hndl;
 		uint32_t	 head;
 		uint32_t	 tail;
-	}			     send_info[GNIX_MAX_IOV_LIMIT];
-	struct gnix_fid_mem_desc     *send_md[GNIX_MAX_IOV_LIMIT];
+	}			     send_info[GNIX_MAX_MSG_IOV_LIMIT];
+	struct gnix_fid_mem_desc     *send_md[GNIX_MAX_MSG_IOV_LIMIT];
 	size_t                       send_iov_cnt;
 	uint64_t                     send_flags;
 	size_t			     cum_send_len;
@@ -590,8 +592,8 @@ struct gnix_fab_req_msg {
 						* the txd's int buf
 						*/
 		uint32_t	 head_len : 2;
-	}			     recv_info[GNIX_MAX_IOV_LIMIT];
-	struct gnix_fid_mem_desc     *recv_md[GNIX_MAX_IOV_LIMIT];
+	}			     recv_info[GNIX_MAX_MSG_IOV_LIMIT];
+	struct gnix_fid_mem_desc     *recv_md[GNIX_MAX_MSG_IOV_LIMIT];
 	size_t			     recv_iov_cnt;
 	uint64_t                     recv_flags; /* protocol, API info */
 	size_t			     cum_recv_len;
@@ -849,7 +851,12 @@ struct gnix_fab_req {
 	uint64_t                  flags;
 
 	/* TODO: change the size of this for unaligned data? */
-	struct gnix_tx_descriptor *iov_txds[GNIX_MAX_IOV_LIMIT];
+	struct gnix_tx_descriptor *iov_txds[GNIX_MAX_MSG_IOV_LIMIT];
+	/*
+	 * special value of UINT_MAX is used to indicate
+	 * an unrecoverable (aka non-transient) error has occurred
+	 * in one of the underlying GNI transactions
+	 */
 	uint32_t		  tx_failures;
 
 	/* common to rma/amo/msg */
@@ -861,6 +868,24 @@ struct gnix_fab_req {
 	char inject_buf[GNIX_INJECT_SIZE];
 };
 
+/*
+ * test whether a request is replayable
+ * or not based on the value of the tx_failures field
+ */
+
+static inline bool _gnix_req_replayable(struct gnix_fab_req *req)
+{
+	bool ret = false;
+	uint32_t tx_failures, max_retrans;
+
+	tx_failures = req->tx_failures;
+	max_retrans = req->gnix_ep->domain->params.max_retransmits;
+	if ((req->tx_failures != UINT_MAX) &&
+	    (++tx_failures < max_retrans))
+		ret = true;
+
+	return ret;
+}
 static inline int _gnix_req_inject_err(struct gnix_fab_req *req)
 {
 	int err_cnt = req->gnix_ep->domain->params.err_inject_count;
@@ -963,10 +988,6 @@ int gnix_cntr_open(struct fid_domain *domain, struct fi_cntr_attr *attr,
 #else
 #define DIRECT_FN
 #define STATIC static
-#endif
-
-#ifdef __cplusplus
-} /* extern "C" */
 #endif
 
 #endif /* _GNIX_H_ */

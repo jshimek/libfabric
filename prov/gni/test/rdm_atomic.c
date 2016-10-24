@@ -101,6 +101,7 @@ void common_atomic_setup(void)
 	struct fi_av_attr attr;
 	size_t addrlen = 0;
 
+	memset(&attr, 0, sizeof(attr));
 	attr.type = FI_AV_MAP;
 	attr.count = NUMEPS;
 
@@ -111,7 +112,7 @@ void common_atomic_setup(void)
 	hints->ep_attr->type = FI_EP_RDM;
 	hints->domain_attr->cq_data_size = 4;
 	hints->mode = ~0;
-	hints->fabric_attr->name = strdup("gni");
+	hints->fabric_attr->prov_name = strdup("gni");
 	hints->caps |= GNIX_EP_RDM_PRIMARY_CAPS;
 
 	target = malloc(BUF_SZ);
@@ -1150,7 +1151,7 @@ void do_axor(int len)
 	cr_assert_eq(ret, 1);
 	rdm_atomic_check_tcqe(&cqe, target, FI_ATOMIC | FI_WRITE, 0);
 
-	w[0] = 0;
+	w[0] = 1;
 	rdm_atomic_check_cntrs(w, r, w_e, r_e);
 
 	dbg_printf("result  %016lx\n", *((uint64_t *)target));
@@ -1180,7 +1181,6 @@ void do_axor(int len)
 	cr_assert_eq(ret, 1);
 	rdm_atomic_check_tcqe(&cqe, target, FI_ATOMIC | FI_WRITE, 0);
 
-	w[0] = 0;
 	rdm_atomic_check_cntrs(w, r, w_e, r_e);
 
 	dbg_printf("AX_TGT_DATA & (AX_OP1 | ~AX_S_MASK) %016lx\n",
@@ -1213,6 +1213,7 @@ void do_axor(int len)
 	rdm_atomic_check_tcqe(&cqe, target, FI_ATOMIC | FI_WRITE, 0);
 
 	w[0] = 0;
+	r[0] = 1;
 	rdm_atomic_check_cntrs(w, r, w_e, r_e);
 
 	dbg_printf("result  %016lx\n", *((uint64_t *)target));
@@ -1249,7 +1250,6 @@ void do_axor(int len)
 	cr_assert_eq(ret, 1);
 	rdm_atomic_check_tcqe(&cqe, target, FI_ATOMIC | FI_WRITE, 0);
 
-	w[0] = 0;
 	rdm_atomic_check_cntrs(w, r, w_e, r_e);
 
 	dbg_printf("AX_TGT_DATA & (AX_OP1 | ~AX_S_MASK) %016lx\n",

@@ -63,9 +63,11 @@
 
 #define UTIL_FLAG_ERROR	(1ULL << 60)
 
-#define OFI_Q_STERROR(prov, log, q, q_str, entry, strerror)			\
-	FI_WARN(prov, log, "fi_" q_str "_readerr: prov_err:%s", entry.err,	\
-			strerror(q, entry.prov_errno, entry.err_data, NULL, 0))
+#define OFI_Q_STRERROR(prov, log, q, q_str, entry, strerror)			\
+	FI_WARN(prov, log, "fi_" q_str "_readerr: err: %d, prov_err: %s (%d)\n",\
+			entry.err,						\
+			strerror(q, entry.prov_errno, entry.err_data, NULL, 0), \
+			entry.prov_errno)
 
 #define OFI_Q_READERR(prov, log, q, q_str, readerr, strerror, ret, err_entry)	\
 	do {									\
@@ -74,7 +76,7 @@
 			FI_WARN(prov, log,					\
 					"Unable to fi_" q_str "_readerr\n");	\
 		} else {							\
-			OFI_Q_STERROR(prov, log, q, q_str,			\
+			OFI_Q_STRERROR(prov, log, q, q_str,			\
 					err_entry, strerror);			\
 		}								\
 	} while (0)
@@ -86,6 +88,9 @@
 #define OFI_EQ_READERR(prov, log, eq, ret, err_entry)		\
 	OFI_Q_READERR(prov, log, eq, "eq", fi_eq_readerr, 	\
 			fi_eq_strerror, ret, err_entry)
+
+#define ofi_sin_addr(addr) (((struct sockaddr_in *)(addr))->sin_addr)
+#define ofi_sin6_addr(addr) (((struct sockaddr_in6 *)(addr))->sin6_addr)
 
 enum fi_match_type {
 	FI_MATCH_EXACT,
@@ -228,6 +233,8 @@ struct util_cntr {
 	struct fid_cntr		cntr_fid;
 	struct util_domain	*domain;
 	atomic_t		ref;
+	uint64_t		checkpoint_cnt;
+	uint64_t		checkpoint_err;
 };
 
 
@@ -510,8 +517,6 @@ int util_getinfo(const struct util_prov *util_prov, uint32_t version,
 struct fid_list_entry {
 	struct dlist_entry	entry;
 	struct fid		*fid;
-
-	uint64_t		last_cntr_val;
 };
 
 int fid_list_insert(struct dlist_entry *fid_list, fastlock_t *lock,

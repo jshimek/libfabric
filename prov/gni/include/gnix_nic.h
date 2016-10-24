@@ -34,10 +34,6 @@
 #ifndef _GNIX_NIC_H_
 #define _GNIX_NIC_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #if HAVE_CONFIG_H
 #include <config.h>
 #endif /* HAVE_CONFIG_H */
@@ -50,7 +46,6 @@ extern "C" {
 #include "gnix_util.h"
 
 #define GNIX_DEF_MAX_NICS_PER_PTAG	4
-#define GNIX_MAX_IOV_LIMIT 8	/* this should have been pulled in from gnix.h.. */
 
 extern uint32_t gnix_max_nics_per_ptag;
 
@@ -461,14 +456,9 @@ static inline void *__gnix_nic_elem_by_rem_id(struct gnix_nic *nic, int rem_id)
 	assert(nic);
 	assert(rem_id <= nic->vc_id_table_count);
 	return nic->vc_id_table[rem_id];
-	return 0;
 }
 
 void _gnix_nic_txd_err_inject(struct gnix_nic *nic,
 			      struct gnix_tx_descriptor *txd);
-
-#ifdef __cplusplus
-} /* extern "C" */
-#endif
 
 #endif /* _GNIX_NIC_H_ */

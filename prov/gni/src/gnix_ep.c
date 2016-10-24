@@ -205,7 +205,7 @@ static inline ssize_t __ep_recvv(struct fid_ep *ep, const struct iovec *iov,
 {
 	struct gnix_fid_ep *ep_priv;
 
-	if (!ep || !iov || count > GNIX_MAX_IOV_LIMIT) {
+	if (!ep || !iov || count > GNIX_MAX_MSG_IOV_LIMIT) {
 		return -FI_EINVAL;
 	}
 
@@ -265,7 +265,7 @@ static inline ssize_t __ep_sendv(struct fid_ep *ep, const struct iovec *iov,
 {
 	struct gnix_fid_ep *gnix_ep;
 
-	if (!ep || !iov || !count || count > GNIX_MAX_IOV_LIMIT) {
+	if (!ep || !iov || !count || count > GNIX_MAX_MSG_IOV_LIMIT) {
 		return -FI_EINVAL;
 	}
 
@@ -609,7 +609,7 @@ gnix_ep_readv(struct fid_ep *ep, const struct iovec *iov, void **desc,
 	struct gnix_fid_ep *gnix_ep;
 	uint64_t flags;
 
-	if (!ep || !iov || !desc || count != 1) {
+	if (!ep || !iov || !desc || count > GNIX_MAX_RMA_IOV_LIMIT) {
 		return -FI_EINVAL;
 	}
 
@@ -676,7 +676,7 @@ gnix_ep_writev(struct fid_ep *ep, const struct iovec *iov, void **desc,
 	struct gnix_fid_ep *gnix_ep;
 	uint64_t flags;
 
-	if (!ep || !iov || !desc || count != 1) {
+	if (!ep || !iov || !desc || count > GNIX_MAX_RMA_IOV_LIMIT) {
 		return -FI_EINVAL;
 	}
 
@@ -696,7 +696,8 @@ DIRECT_FN STATIC ssize_t gnix_ep_writemsg(struct fid_ep *ep, const struct fi_msg
 	struct gnix_fid_ep *gnix_ep;
 
 	if (!ep || !msg || !msg->msg_iov || !msg->rma_iov ||
-	    msg->iov_count != 1 || msg->rma_iov_count != 1 ||
+	    msg->iov_count != 1 ||
+		msg->rma_iov_count > GNIX_MAX_RMA_IOV_LIMIT ||
 	    msg->rma_iov[0].len > msg->msg_iov[0].iov_len) {
 		return -FI_EINVAL;
 	}
@@ -974,7 +975,7 @@ __gnix_fabric_ops_native_amo(struct fid_ep *ep, const void *buf, size_t count,
 				    fi_addr_t dest_addr,
 				    uint64_t addr, uint64_t key,
 				    enum fi_datatype datatype,
-				    enum gnix_fab_req_type req_type,
+				    int req_type,
 				    void *context)
 {
 	struct gnix_fid_ep *gnix_ep;
@@ -985,6 +986,10 @@ __gnix_fabric_ops_native_amo(struct fid_ep *ep, const void *buf, size_t count,
 	uint64_t flags;
 
 	if (!ep)
+		return -FI_EINVAL;
+	if ((req_type < 0) || (req_type > GNIX_FAB_RQ_MAX_TYPES) || 
+		(req_type >= GNIX_FAB_RQ_END_NON_NATIVE && 
+		 req_type < GNIX_FAB_RQ_START_NATIVE))
 		return -FI_EINVAL;
 
 	gnix_ep = container_of(ep, struct gnix_fid_ep, ep_fid);
@@ -1059,7 +1064,7 @@ gnix_ep_atomic_writev(struct fid_ep *ep, const struct fi_ioc *iov, void **desc,
 		      uint64_t key, enum fi_datatype datatype, enum fi_op op,
 		      void *context)
 {
-	if (!iov || count != 1) {
+	if (!iov || count > 1) {
 		return -FI_EINVAL;
 	}
 
@@ -1185,7 +1190,7 @@ gnix_ep_atomic_readwritev(struct fid_ep *ep, const struct fi_ioc *iov,
 			  enum fi_datatype datatype, enum fi_op op,
 			  void *context)
 {
-	if (!iov || count != 1 || !resultv)
+	if (!iov || count > 1 || !resultv)
 		return -FI_EINVAL;
 
 	return gnix_ep_atomic_readwrite(ep, iov[0].addr, iov[0].count,
@@ -1286,7 +1291,7 @@ DIRECT_FN STATIC ssize_t gnix_ep_atomic_compwritev(struct fid_ep *ep,
 						   enum fi_op op,
 						   void *context)
 {
-	if (!iov || count != 1 || !resultv || !comparev)
+	if (!iov || count > 1 || !resultv || !comparev)
 		return -FI_EINVAL;
 
 	return gnix_ep_atomic_compwrite(ep, iov[0].addr, iov[0].count,
@@ -1868,9 +1873,11 @@ DIRECT_FN int gnix_ep_open(struct fid_domain *domain, struct fi_info *info,
 			   struct fid_ep **ep, void *context)
 {
 	int ret = FI_SUCCESS;
+	int err_ret;
 	uint32_t cdm_id;
 	struct gnix_fid_domain *domain_priv;
 	struct gnix_fid_ep *ep_priv;
+	struct gnix_ep_name *name;
 	gnix_ht_key_t *key_ptr;
 	bool free_list_inited = false;
 
@@ -1952,7 +1959,10 @@ DIRECT_FN int gnix_ep_open(struct fid_domain *domain, struct fi_info *info,
 	}
 
 	if (GNIX_EP_RDM_DGM(ep_priv->type)) {
-		if (info->src_addr != NULL) {
+		name = (struct gnix_ep_name *)info->src_addr;
+		if ((name != NULL) &&
+			(name->name_type == GNIX_EPN_TYPE_BOUND)) {
+
 			ret = __gnix_ep_bound_prep(domain_priv,
 						   info,
 						   ep_priv);
@@ -2060,24 +2070,41 @@ DIRECT_FN int gnix_ep_open(struct fid_domain *domain, struct fi_info *info,
 
 err:
 	if (ep_priv->xpmem_hndl) {
-		if (_gnix_xpmem_handle_destroy(ep_priv->xpmem_hndl) !=
-		    FI_SUCCESS) {
+		err_ret = _gnix_xpmem_handle_destroy(ep_priv->xpmem_hndl);
+		if (err_ret != FI_SUCCESS) {
 			GNIX_WARN(FI_LOG_EP_CTRL,
 				  "_gnix_xpmem_handle_destroy returned %s\n",
-				  fi_strerror(-ret));
+				  fi_strerror(-err_ret));
 		}
 	}
 
-	__destruct_tag_storages(ep_priv);
+	err_ret = __destruct_tag_storages(ep_priv);
+	if (err_ret != FI_SUCCESS) {
+		GNIX_WARN(FI_LOG_EP_CTRL,
+			  "__destruct_tag_stroages returned %s\n",
+			  fi_strerror(-err_ret));
+	}
 
 	if (free_list_inited == true)
 		__fr_freelist_destroy(ep_priv);
 
-	if (ep_priv->cm_nic != NULL)
-		ret = _gnix_cm_nic_free(ep_priv->cm_nic);
+	if (ep_priv->cm_nic != NULL) {
+		err_ret = _gnix_cm_nic_free(ep_priv->cm_nic);
+		if (err_ret != FI_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_CTRL,
+				  "_gnix_cm_nic_free returned %s\n",
+				  fi_strerror(-err_ret));
+		}
+	}
 
-	if (ep_priv->nic != NULL)
-		ret = _gnix_nic_free(ep_priv->nic);
+	if (ep_priv->nic != NULL) {
+		err_ret = _gnix_nic_free(ep_priv->nic);
+		if (err_ret != FI_SUCCESS) {
+			GNIX_WARN(FI_LOG_EP_CTRL,
+				  "_gnix_nic_free returned %s\n",
+				  fi_strerror(-err_ret));
+		}
+	}
 
 	free(ep_priv);
 	return ret;

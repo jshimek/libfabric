@@ -127,6 +127,7 @@ static int fi_ibv_domain_close(fid_t fid)
 	domain = container_of(fid, struct fi_ibv_domain, domain_fid.fid);
 
 	if (domain->rdm) {
+		rdma_destroy_ep(domain->rdm_cm->listener);
 		free(domain->rdm_cm);
 	}
 
@@ -282,6 +283,7 @@ fi_ibv_domain(struct fid_fabric *fabric, struct fi_info *info,
 			ret = -FI_EOTHER;
 			goto err3;
 		}
+		_domain->rdm_cm->is_bound = 0;
 	} else {
 		_domain->domain_fid.ops = &fi_ibv_domain_ops;
 	}

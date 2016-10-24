@@ -189,12 +189,39 @@ static int gnix_getinfo(uint32_t version, const char *node, const char *service,
 			struct fi_info **info)
 {
 	int ret = 0;
+	uint32_t pe = -1;
+	uint32_t cpu_id = -1;
 	int ep_type_unspec = 1;
 	uint64_t mode = GNIX_FAB_MODES;
 	struct fi_info *gnix_info = NULL;
 	struct gnix_ep_name *dest_addr = NULL;
 	struct gnix_ep_name *src_addr = NULL;
 	struct gnix_ep_name *addr = NULL;
+	gni_return_t status;
+
+	/*
+	 * do an early check of hints if an app is trying to use
+	 * an addressing format we don't handle
+	 */
+
+	if (hints) {
+		switch (hints->addr_format) {
+		case FI_FORMAT_UNSPEC:
+		case FI_ADDR_GNI:
+			break;
+		default:
+			GNIX_INFO(FI_LOG_FABRIC,
+				"hints->addr_format=%d, supported=%d,%d.\n",
+				hints->addr_format, FI_FORMAT_UNSPEC, FI_ADDR_GNI);
+			ret = -FI_EADDRNOTAVAIL;
+			goto err;
+		}
+	}
+
+	addr = malloc(sizeof(*addr));
+	if (!addr) {
+		goto err;
+	}
 
 	/*
 	 * the code below for resolving a node/service to what
@@ -202,10 +229,6 @@ static int gnix_getinfo(uint32_t version, const char *node, const char *service,
 	 * but put a place holder in place
 	 */
 	if (node) {
-		addr = malloc(sizeof(*addr));
-		if (!addr) {
-			goto err;
-		}
 
 		/* resolve node/service to gnix_ep_name */
 		ret = gnix_resolve_name(node, service, flags, addr);
@@ -224,6 +247,30 @@ static int gnix_getinfo(uint32_t version, const char *node, const char *service,
 			if (hints && hints->src_addr)
 				src_addr = hints->src_addr;
 		}
+	} else {
+		/*
+		 * okay per the man page, just fill in the src_addr
+		 */
+		src_addr = addr;
+
+		status = GNI_CdmGetNicAddress(0, &pe, &cpu_id);
+		if(status != GNI_RC_SUCCESS) {
+			GNIX_WARN(FI_LOG_FABRIC,
+				  "Unable to get NIC address.");
+				  ret = gnixu_to_fi_errno(status);
+			goto err;
+		}
+
+		if (pe == -1) {
+			GNIX_WARN(FI_LOG_FABRIC,
+				"Unable to acquire valid address for local Aries\n");
+			ret = -FI_EADDRNOTAVAIL;
+			goto err;
+		}
+
+		src_addr->gnix_addr.device_addr = pe;
+		src_addr->gnix_addr.cdm_id = 0;  /* just set this to zero */
+		src_addr->name_type = GNIX_EPN_TYPE_UNBOUND;
 	}
 
 	if (src_addr)
@@ -280,13 +327,13 @@ static int gnix_getinfo(uint32_t version, const char *node, const char *service,
 	gnix_info->tx_attr->msg_order = FI_ORDER_SAS;
 	gnix_info->tx_attr->comp_order = FI_ORDER_NONE;
 	gnix_info->tx_attr->size = GNIX_TX_SIZE_DEFAULT;
-	gnix_info->tx_attr->iov_limit = 1;
+	gnix_info->tx_attr->iov_limit = GNIX_MAX_MSG_IOV_LIMIT;
 	gnix_info->tx_attr->inject_size = GNIX_INJECT_SIZE;
-	gnix_info->tx_attr->rma_iov_limit = 1;
+	gnix_info->tx_attr->rma_iov_limit = GNIX_MAX_RMA_IOV_LIMIT;
 	gnix_info->rx_attr->msg_order = FI_ORDER_SAS;
 	gnix_info->rx_attr->comp_order = FI_ORDER_NONE;
 	gnix_info->rx_attr->size = GNIX_RX_SIZE_DEFAULT;
-	gnix_info->rx_attr->iov_limit = 1;
+	gnix_info->rx_attr->iov_limit = GNIX_MAX_MSG_IOV_LIMIT;
 
 	if (hints) {
 		if (hints->ep_attr) {
@@ -517,7 +564,8 @@ GNI_INI
 		GNIX_INFO(FI_LOG_FABRIC, "gnix_max_nics_per_ptag: %u\n",
 			  gnix_max_nics_per_ptag);
 	} else {
-		GNIX_INFO(FI_LOG_FABRIC, "_gnix_nics_per_rank failed: %d\n", rc);
+		GNIX_WARN(FI_LOG_FABRIC, "_gnix_nics_per_rank failed: %d\n",
+			  rc);
 	}
 
 	if (getenv("GNIX_MAX_NICS") != NULL)
@@ -527,12 +575,13 @@ GNI_INI
 		gnix_xpmem_disabled = true;
 
 	/*
-	 * if for some reason we can't even allocate a single nic, bail.
+	 * well if we didn't get 1 nic, that means we must really be doing
+	 * FMA sharing.
 	 */
 
 	if (gnix_max_nics_per_ptag == 0) {
-		GNIX_WARN(FI_LOG_FABRIC, "Insufficient network resources\n");
-		provider = NULL;
+		gnix_max_nics_per_ptag = 1;
+		GNIX_WARN(FI_LOG_FABRIC, "Using inter-procss FMA sharing\n");
 	}
 
 	return (provider);

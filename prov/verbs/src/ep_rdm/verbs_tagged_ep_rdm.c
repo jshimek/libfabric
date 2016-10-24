@@ -102,41 +102,6 @@ static int fi_ibv_rdm_tagged_getname(fid_t fid, void *addr, size_t * addrlen)
 	return 0;
 }
 
-static inline ssize_t
-rdm_trecv_second_event(struct fi_ibv_rdm_request *request, 
-			struct fi_ibv_rdm_ep *ep)
-{
-	ssize_t ret = FI_SUCCESS;
-
-	switch (request->state.rndv)
-	{
-	case FI_IBV_STATE_RNDV_NOT_USED:
-		if (request->state.eager != FI_IBV_STATE_EAGER_RECV_WAIT4PKT) {
-			struct fi_ibv_recv_got_pkt_process_data data = {
-				.ep = ep
-			};
-			ret = fi_ibv_rdm_req_hndl(request,
-						  FI_IBV_EVENT_RECV_START,
-						  &data);
-		}
-		break;
-	case FI_IBV_STATE_RNDV_RECV_WAIT4RES:
-		if (fi_ibv_rdm_tagged_prepare_send_request(request, ep)) {
-			struct fi_ibv_rdm_tagged_send_ready_data data = {
-				.ep = ep
-			};
-			ret = fi_ibv_rdm_req_hndl(request,
-						  FI_IBV_EVENT_POST_READY,
-						  &data);
-		}
-		break;
-	default:
-		break;
-	}
-
-	return ret;
-}
-
 static ssize_t
 fi_ibv_rdm_tagged_recvmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged *msg,
 			  uint64_t flags)
@@ -150,16 +115,15 @@ fi_ibv_rdm_tagged_recvmsg(struct fid_ep *ep_fid, const struct fi_msg_tagged *msg
 		return -FI_EMSGSIZE;
 	}
 
-	struct fi_ibv_rdm_conn *conn =
-		(msg->addr == FI_ADDR_UNSPEC) ? NULL :
-		(struct fi_ibv_rdm_conn *) msg->addr;
+	struct fi_ibv_rdm_conn *conn = ep_rdm->av->addr_to_conn(ep_rdm, msg->addr);
 
 	struct fi_ibv_rdm_tagged_recv_start_data recv_data = {
 		.peek_data = {
 			.minfo = {
 				.conn = conn,
 				.tag = msg->tag,
-				.tagmask = ~(msg->ignore)
+				.tagmask = ~(msg->ignore),
+				.is_tagged = 1
 			},
 			.context = msg->context,
 			.flags = (ep_rdm->rx_selective_completion ?
@@ -250,9 +214,9 @@ static inline ssize_t
 fi_ibv_rdm_tagged_inject(struct fid_ep *fid, const void *buf, size_t len, 
 			 fi_addr_t dest_addr, uint64_t tag)
 {
-	struct fi_ibv_rdm_conn *conn = (struct fi_ibv_rdm_conn *)dest_addr;
 	struct fi_ibv_rdm_ep *ep =
 		container_of(fid, struct fi_ibv_rdm_ep, ep_fid);
+	struct fi_ibv_rdm_conn *conn = ep->av->addr_to_conn(ep, dest_addr);
 
 	const size_t size = len + sizeof(struct fi_ibv_rdm_header);
 
@@ -283,7 +247,7 @@ fi_ibv_rdm_tagged_inject(struct fid_ep *fid, const void *buf, size_t len,
 			wr.send_flags = (sge.length < ep->max_inline_rc)
 				? IBV_SEND_INLINE : 0;
 			wr.imm_data = 0;
-			wr.opcode = ep->topcode;
+			wr.opcode = ep->eopcode;
 
 			sbuf->service_data.pkt_len = size;
 			sbuf->header.tag = tag;
@@ -314,33 +278,6 @@ fi_ibv_rdm_tagged_inject(struct fid_ep *fid, const void *buf, size_t len,
 	return -FI_EAGAIN;
 }
 
-static ssize_t
-fi_ibv_rdm_tagged_send_common(struct fi_ibv_rdm_tsend_start_data* sdata)
-{
-	struct fi_ibv_rdm_request *request =
-		util_buf_alloc(fi_ibv_rdm_request_pool);
-	FI_IBV_RDM_DBG_REQUEST("get_from_pool: ", request, FI_LOG_DEBUG);
-
-	/* Initial state */
-	request->state.eager = FI_IBV_STATE_EAGER_BEGIN;
-	request->state.rndv  = FI_IBV_STATE_RNDV_NOT_USED;
-	request->state.err   = FI_SUCCESS;
-
-	const int in_order = (sdata->conn->postponed_entry) ? 0 : 1;
-	int ret = fi_ibv_rdm_req_hndl(request, FI_IBV_EVENT_SEND_START, sdata);
-
-	if (!ret && in_order &&
-		fi_ibv_rdm_tagged_prepare_send_request(request, sdata->ep_rdm))
-	{
-		struct fi_ibv_rdm_tagged_send_ready_data req_data = 
-			{ .ep = sdata->ep_rdm };
-		ret = fi_ibv_rdm_req_hndl(request, FI_IBV_EVENT_POST_READY,
-					  &req_data);
-	}
-
-	return ret;
-}
-
 static ssize_t fi_ibv_rdm_tagged_senddatato(struct fid_ep *fid, const void *buf,
 					    size_t len, void *desc,
 					    uint64_t data, fi_addr_t dest_addr,
@@ -349,21 +286,22 @@ static ssize_t fi_ibv_rdm_tagged_senddatato(struct fid_ep *fid, const void *buf,
 	struct fi_ibv_rdm_ep *ep_rdm = 
 		container_of(fid, struct fi_ibv_rdm_ep, ep_fid);
 
-	struct fi_ibv_rdm_tsend_start_data sdata = {
+	struct fi_ibv_rdm_send_start_data sdata = {
 		.ep_rdm = container_of(fid, struct fi_ibv_rdm_ep, ep_fid),
-		.conn = (struct fi_ibv_rdm_conn *) dest_addr,
+		.conn = ep_rdm->av->addr_to_conn(ep_rdm, dest_addr),
 		.data_len = len,
 		.context = context,
 		.flags = FI_TAGGED | FI_SEND |
 			(ep_rdm->tx_selective_completion ? 0ULL : FI_COMPLETION),
 		.tag = tag,
+		.is_tagged = 1,
 		.buf.src_addr = (void*)buf,
 		.iov_count = 0,
 		.imm = (uint32_t) data,
 		.stype = IBV_RDM_SEND_TYPE_GEN
 	};
 
-	return fi_ibv_rdm_tagged_send_common(&sdata);
+	return fi_ibv_rdm_send_common(&sdata);
 }
 
 static ssize_t fi_ibv_rdm_tagged_sendto(struct fid_ep *fid, const void *buf,
@@ -381,14 +319,15 @@ static ssize_t fi_ibv_rdm_tagged_sendmsg(struct fid_ep *ep,
 	struct fi_ibv_rdm_ep *ep_rdm = 
 		container_of(ep, struct fi_ibv_rdm_ep, ep_fid);
 
-	struct fi_ibv_rdm_tsend_start_data sdata = {
+	struct fi_ibv_rdm_send_start_data sdata = {
 		.ep_rdm = container_of(ep, struct fi_ibv_rdm_ep, ep_fid),
-		.conn = (struct fi_ibv_rdm_conn *) msg->addr,
+		.conn = ep_rdm->av->addr_to_conn(ep_rdm, msg->addr),
 		.data_len = 0,
 		.context = msg->context,
 		.flags = FI_TAGGED | FI_SEND | (ep_rdm->tx_selective_completion ?
 			(flags & FI_COMPLETION) : FI_COMPLETION),
 		.tag = msg->tag,
+		.is_tagged = 1,
 		.buf.src_addr = NULL,
 		.iov_count = 0,
 		.imm = (uint32_t) 0,
@@ -429,7 +368,7 @@ static ssize_t fi_ibv_rdm_tagged_sendmsg(struct fid_ep *ep,
 		break;
 	}
 
-	return fi_ibv_rdm_tagged_send_common(&sdata);
+	return fi_ibv_rdm_send_common(&sdata);
 }
 
 static ssize_t fi_ibv_rdm_tagged_sendv(struct fid_ep *ep,
@@ -523,11 +462,17 @@ fi_ibv_rdm_process_recv(struct fi_ibv_rdm_ep *ep, struct fi_ibv_rdm_conn *conn,
 		VERBS_DBG(FI_LOG_EP_DATA,
 			"GOT RNDV ACK from conn %p, id %p\n", conn, request);
 	} else if (pkt_type != FI_IBV_RDM_RMA_PKT) {
-		struct fi_ibv_rdm_tagged_minfo minfo = {
+		struct fi_ibv_rdm_minfo minfo = {
 			.conn = conn,
 			.tag = rbuf->header.tag,
-			.tagmask = 0
+			.tagmask = 0,
+			.is_tagged = (pkt_type == FI_IBV_RDM_MSG_PKT) ? 0 : 1
 		};
+
+		if (pkt_type == FI_IBV_RDM_RNDV_RTS_PKT) {
+			struct fi_ibv_rdm_rndv_header* h = (void *)&rbuf->header;
+			minfo.is_tagged = h->is_tagged;
+		}
 
 		struct dlist_entry *found_entry =
 			dlist_find_first_match(&fi_ibv_rdm_posted_queue,
@@ -634,8 +579,18 @@ fi_ibv_rdm_process_recv_wc(struct fi_ibv_rdm_ep *ep, struct ibv_wc *wc)
 
 	check_and_repost_receives(ep, conn);
 
-	if (rbuf->service_data.status == BUF_STATUS_RECVED &&
-	    fi_ibv_rdm_buffer_check_seq_num(rbuf, conn->recv_processed))
+	if ((rbuf->service_data.status == BUF_STATUS_RECVED) &&
+	    /* NOTE: the ibverbs bug?
+	     * In case of out of order arriving we may check seq_num only if
+	     * send was posted with IBV_WR_RDMA_WRITE_WITH_IMM opcode because
+	     * the sender controls this.
+	     * Otherwise, the sender with IBV_WR_SEND opcode consumes pre-posted
+	     * buffers in the same order as they were pre-posted by recv.
+	     * So, we should handle it as is. Potentially, this way may cause
+	     * broken ordering of completions in fi_cq.
+	     */
+	    (wc->opcode == IBV_WC_RECV_RDMA_WITH_IMM ?
+	    fi_ibv_rdm_buffer_check_seq_num(rbuf, conn->recv_processed) : 1))
 	{
 		do {
 			assert(rbuf->service_data.pkt_len > 0);

@@ -75,7 +75,7 @@ common_srcs += include/unix/osd.h
 endif
 
 # ensure dl-built providers link back to libfabric
-linkback = $(top_builddir)/src/libfabric.la
+linkback = src/libfabric.la
 
 bin_PROGRAMS = \
 	util/fi_info \
@@ -127,7 +127,7 @@ src_libfabric_la_LDFLAGS =
 src_libfabric_la_LIBADD =
 src_libfabric_la_DEPENDENCIES = libfabric.map
 
-src_libfabric_la_LDFLAGS += -version-info 3:0:2 -export-dynamic \
+src_libfabric_la_LDFLAGS += -version-info 3:1:2 -export-dynamic \
 			   $(libfabric_version_script)
 rdmainclude_HEADERS += \
 	$(top_srcdir)/include/rdma/fabric.h \

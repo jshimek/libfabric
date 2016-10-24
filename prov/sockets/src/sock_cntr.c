@@ -200,13 +200,10 @@ void sock_cntr_check_trigger_list(struct sock_cntr *cntr)
 
 static uint64_t sock_cntr_read(struct fid_cntr *cntr)
 {
-	uint64_t curr_val;
 	struct sock_cntr *_cntr;
 	_cntr = container_of(cntr, struct sock_cntr, cntr_fid);
 	sock_cntr_progress(_cntr);
-	curr_val = atomic_get(&_cntr->value);
-	atomic_set(&_cntr->last_read_val, curr_val);
-	return curr_val;
+	return atomic_get(&_cntr->value);
 }
 
 void sock_cntr_inc(struct sock_cntr *cntr)
@@ -264,7 +261,7 @@ static int sock_cntr_set(struct fid_cntr *cntr, uint64_t value)
 static int sock_cntr_wait(struct fid_cntr *cntr, uint64_t threshold,
 			  int timeout)
 {
-	int ret = 0;
+	int last_read, ret = 0;
 	uint64_t start_ms = 0, end_ms = 0, remaining_ms = 0;
 	struct sock_cntr *_cntr;
 
@@ -288,7 +285,7 @@ static int sock_cntr_wait(struct fid_cntr *cntr, uint64_t threshold,
 		end_ms = start_ms + timeout;
 	}
 
-        int last_read = last_read = atomic_get(&_cntr->value);
+        last_read = atomic_get(&_cntr->value);
 	remaining_ms = timeout;
 
 	while (!ret && last_read < threshold) {

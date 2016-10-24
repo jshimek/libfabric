@@ -138,12 +138,25 @@ struct fi_ibv_eq {
 int fi_ibv_eq_open(struct fid_fabric *fabric, struct fi_eq_attr *attr,
 		   struct fid_eq **eq, void *context);
 
+struct fi_ibv_rdm_ep;
+
+typedef struct fi_ibv_rdm_conn *
+	(*fi_ibv_rdm_addr_to_conn_func)
+	(struct fi_ibv_rdm_ep *ep, fi_addr_t addr);
+
+typedef fi_addr_t
+	(*fi_ibv_rdm_conn_to_addr_func)
+	(struct fi_ibv_rdm_ep *ep, struct fi_ibv_rdm_conn *conn);
+
 struct fi_ibv_av {
 	struct fid_av		av_fid;
 	struct fi_ibv_domain	*domain;
 	struct fi_ibv_rdm_ep	*ep;
 	size_t			count;
+	size_t			used;
 	enum fi_av_type		type;
+	fi_ibv_rdm_addr_to_conn_func addr_to_conn;
+	fi_ibv_rdm_conn_to_addr_func conn_to_addr;
 };
 
 int fi_ibv_av_open(struct fid_domain *domain, struct fi_av_attr *attr,
@@ -271,7 +284,8 @@ struct fi_ops_cm *fi_ibv_msg_ep_ops_cm(struct fi_ibv_msg_ep *ep);
 struct fi_ops_msg *fi_ibv_msg_ep_ops_msg(struct fi_ibv_msg_ep *ep);
 struct fi_ops_rma *fi_ibv_msg_ep_ops_rma(struct fi_ibv_msg_ep *ep);
 
-struct fi_ops_rma *fi_ibv_rdm_ep_ops_rma(struct fi_ibv_rdm_ep *ep);
+struct fi_ops_rma *fi_ibv_rdm_ep_ops_rma();
+struct fi_ops_msg *fi_ibv_rdm_ep_ops_msg();
 
 struct fi_ops_msg *fi_ibv_msg_srq_ep_ops_msg(struct fi_ibv_msg_ep *ep);
 

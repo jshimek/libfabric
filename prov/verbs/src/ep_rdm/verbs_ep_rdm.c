@@ -253,7 +253,8 @@ static ssize_t fi_ibv_rdm_tagged_ep_cancel(fid_t fid, void *ctx)
 		fi_ibv_rdm_cntr_inc_err(ep_rdm->recv_cntr);
 
 		if (request->comp_flags & FI_COMPLETION) {
-			fi_ibv_rdm_move_to_errcq(request, FI_ECANCELED);
+			fi_ibv_rdm_move_to_errcq(ep_rdm->fi_rcq, request,
+						 FI_ECANCELED);
 		}
 	}
 
@@ -343,7 +344,12 @@ static int fi_ibv_rdm_ep_close(fid_t fid)
 	struct fi_ibv_rdm_ep *ep =
 		container_of(fid, struct fi_ibv_rdm_ep, ep_fid.fid);
 
-	ep->fi_scq->ep = ep->fi_rcq->ep = NULL;
+	if (ep->fi_scq) {
+		ep->fi_scq->ep = NULL;
+	}
+	if (ep->fi_rcq) {
+		ep->fi_rcq->ep = NULL;
+	}
 
 	ep->is_closing = 1;
 	_fi_ibv_rdm_tagged_cm_progress_running = 0;
@@ -419,15 +425,15 @@ static int fi_ibv_rdm_ep_close(fid_t fid)
 		ret = (ret == FI_SUCCESS) ? -errno : ret;
 	}
 
+	rdma_freeaddrinfo(ep->rai);
 	errno = 0;
-	fi_ibv_destroy_ep(ep->rai, &ep->domain->rdm_cm->listener);
 	if (errno) {
-		VERBS_INFO_ERRNO(FI_LOG_AV, "ibv_destroy_ep failed\n", errno);
-		ret = (ret == FI_SUCCESS) ? -errno : ret;
+		VERBS_INFO_ERRNO(FI_LOG_AV, "rdma_freeaddrinfo failed\n", errno);
+		ret = (ret == FI_SUCCESS) ? -ret : ret;
 	}
 
 	/* TODO: move queues & related pools cleanup to close CQ*/
-	fi_ibv_rdm_clean_queues();
+	fi_ibv_rdm_clean_queues(ep);
 
 	util_buf_pool_destroy(fi_ibv_rdm_request_pool);
 	util_buf_pool_destroy(fi_ibv_rdm_extra_buffers_pool);
@@ -485,6 +491,7 @@ int fi_ibv_rdm_open_ep(struct fid_domain *domain, struct fi_info *info,
 		container_of(domain, struct fi_ibv_domain, domain_fid);
 	int ret = 0;
 	int param = 0;
+	char *str_param = NULL;
 
 	if (!info || !info->ep_attr || !info->domain_attr ||
 	    strncmp(_domain->verbs->device->name, info->domain_attr->name,
@@ -504,9 +511,10 @@ int fi_ibv_rdm_open_ep(struct fid_domain *domain, struct fi_info *info,
 	_ep->ep_fid.fid.context = context;
 	_ep->ep_fid.fid.ops = &fi_ibv_rdm_ep_ops;
 	_ep->ep_fid.ops = &fi_ibv_rdm_tagged_ep_base_ops;
-	_ep->ep_fid.tagged = &fi_ibv_rdm_tagged_ops;
-	_ep->ep_fid.rma = fi_ibv_rdm_ep_ops_rma(_ep);
 	_ep->ep_fid.cm = &fi_ibv_rdm_tagged_ep_cm_ops;
+	_ep->ep_fid.msg = fi_ibv_rdm_ep_ops_msg();
+	_ep->ep_fid.rma = fi_ibv_rdm_ep_ops_rma();
+	_ep->ep_fid.tagged = &fi_ibv_rdm_tagged_ops;
 	_ep->tx_selective_completion = 0;
 	_ep->rx_selective_completion = 0;
 
@@ -520,8 +528,15 @@ int fi_ibv_rdm_open_ep(struct fid_domain *domain, struct fi_info *info,
 		goto err;
 	}
 
-	_ep->buff_len = _ep->rndv_threshold =
-		rdm_buffer_size(info->tx_attr->inject_size);
+	FI_INFO(&fi_ibv_prov, FI_LOG_EP_CTRL, "inject_size: %d\n",
+		info->tx_attr->inject_size);
+
+	_ep->rndv_threshold = info->tx_attr->inject_size;
+	FI_INFO(&fi_ibv_prov, FI_LOG_EP_CTRL, "rndv_threshold: %d\n",
+		_ep->rndv_threshold);
+
+	_ep->buff_len = rdm_buffer_size(info->tx_attr->inject_size);
+	FI_INFO(&fi_ibv_prov, FI_LOG_EP_CTRL, "buff_len: %d\n", _ep->buff_len);
 
 	_ep->rndv_seg_size = FI_IBV_RDM_SEG_MAXSIZE;
 	if (!fi_param_get_int(&fi_ibv_prov, "rdm_rndv_seg_size", &param)) {
@@ -547,25 +562,46 @@ int fi_ibv_rdm_open_ep(struct fid_domain *domain, struct fi_info *info,
 		}
 	}
 
+	_ep->rq_wr_depth = info->rx_attr->size;
+	/* one more outstanding slot for releasing eager buffers */
+	_ep->sq_wr_depth = _ep->n_buffs + 1;
+	if (!fi_param_get_str(&fi_ibv_prov, "rdm_eager_send_opcode", &str_param)) {
+		if (!strncmp(str_param, "IBV_WR_RDMA_WRITE_WITH_IMM",
+			     strlen("IBV_WR_RDMA_WRITE_WITH_IMM"))) {
+			_ep->eopcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+		} else if (!strncmp(str_param, "IBV_WR_SEND",
+				    strlen("IBV_WR_SEND"))) {
+			_ep->eopcode = IBV_WR_SEND;
+		} else {
+			FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
+				"invalid value of rdm_eager_send_opcode\n");
+			ret = -FI_EINVAL;
+			goto err;
+		}
+	} else {
+		_ep->eopcode = IBV_WR_SEND;
+	}
+
 	switch (info->ep_attr->protocol) {
 	case FI_PROTO_IB_RDM:
-		_ep->topcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-		_ep->rq_wr_depth = info->rx_attr->size;
-		_ep->sq_wr_depth = _ep->n_buffs + 1;
+		if (_ep->eopcode != IBV_WR_RDMA_WRITE_WITH_IMM &&
+		    _ep->eopcode != IBV_WR_SEND) {
+			FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
+			"Unsupported eager operation code\n");
+			ret = -FI_ENODATA;
+			goto err;
+		}
 		break;
 	case FI_PROTO_IWARP_RDM:
-		_ep->topcode = IBV_WR_SEND;
-		_ep->rq_wr_depth = info->rx_attr->size;
-		/*
-		 * TODO: More then 1 outgoing send causes hang of bidirectional
-		 * RNDV tests on iWarp devices +1 for eager buffers releasing.
-		 * Ideally it should be the same as for FI_PROTO_IB_RDM case
-		 */
-		_ep->sq_wr_depth = 2;
+		if (_ep->eopcode != IBV_WR_SEND) {
+			FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
+			"Unsupported eager operation code\n");
+			ret = -FI_ENODATA;
+			goto err;
+		}
 		break;
 	default:
-		FI_INFO(&fi_ibv_prov, FI_LOG_CORE,
-			"Unsupported protocol\n");
+		FI_INFO(&fi_ibv_prov, FI_LOG_CORE, "Unsupported protocol\n");
 		ret = -FI_ENODATA;
 		goto err;
 	}
@@ -624,6 +660,7 @@ int fi_ibv_rdm_open_ep(struct fid_domain *domain, struct fi_info *info,
 	fi_ibv_rdm_req_hndls_init();
 
 	pthread_mutex_init(&_ep->cm_lock, NULL);
+	_fi_ibv_rdm_tagged_cm_progress_running = 1;
 	ret = pthread_create(&_ep->cm_progress_thread, NULL,
 			     &fi_ibv_rdm_tagged_cm_progress_thread,
 			     (void *)_ep);

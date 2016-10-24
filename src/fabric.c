@@ -57,8 +57,8 @@ struct fi_prov {
 static struct fi_prov *fi_getprov(const char *prov_name);
 
 static struct fi_prov *prov_head, *prov_tail;
-int init = 0;
-pthread_mutex_t ini_lock = PTHREAD_MUTEX_INITIALIZER;
+int ofi_init = 0;
+pthread_mutex_t ofi_ini_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static struct fi_filter prov_filter;
 
@@ -340,9 +340,9 @@ void fi_ini(void)
 {
 	char *param_val = NULL;
 
-	pthread_mutex_lock(&ini_lock);
+	pthread_mutex_lock(&ofi_ini_lock);
 
-	if (init)
+	if (ofi_init)
 		goto unlock;
 
 	fi_param_init();
@@ -390,30 +390,34 @@ void fi_ini(void)
 libdl_done:
 #endif
 
-	fi_register_provider(PSM_INIT, NULL);
 	fi_register_provider(PSM2_INIT, NULL);
+	fi_register_provider(PSM_INIT, NULL);
 	fi_register_provider(USNIC_INIT, NULL);
-	fi_register_provider(MXM_INIT, NULL);
 	fi_register_provider(VERBS_INIT, NULL);
+	fi_register_provider(MXM_INIT, NULL);
 	fi_register_provider(GNI_INIT, NULL);
+	/* fi_register_provider(RXM_INIT, NULL); */
+	/* fi_register_provider(RXD_INIT, NULL); */
+
         /* Initialize the socket(s) provider last.  This will result in
            it being the least preferred provider. */
 	fi_register_provider(UDP_INIT, NULL);
 	fi_register_provider(SOCKETS_INIT, NULL);
-	fi_register_provider(RXM_INIT, NULL);
-	fi_register_provider(RXD_INIT, NULL);
+	/* Before you add ANYTHING here, read the comment above!!! */
 
-	init = 1;
+	/* Seriously, read it! */
+
+	ofi_init = 1;
 
 unlock:
-	pthread_mutex_unlock(&ini_lock);
+	pthread_mutex_unlock(&ofi_ini_lock);
 }
 
 FI_DESTRUCTOR(fi_fini(void))
 {
 	struct fi_prov *prov;
 
-	if (!init)
+	if (!ofi_init)
 		return;
 
 	while (prov_head) {
@@ -519,7 +523,7 @@ int DEFAULT_SYMVER_PRE(fi_getinfo)(uint32_t version, const char *node, const cha
 	struct fi_info *tail, *cur;
 	int ret;
 
-	if (!init)
+	if (!ofi_init)
 		fi_ini();
 
 	if (FI_VERSION_LT(fi_version(), version)) {
@@ -687,7 +691,7 @@ int DEFAULT_SYMVER_PRE(fi_fabric)(struct fi_fabric_attr *attr, struct fid_fabric
 	if (!attr || !attr->prov_name || !attr->name)
 		return -FI_EINVAL;
 
-	if (!init)
+	if (!ofi_init)
 		fi_ini();
 
 	prov = fi_getprov(attr->prov_name);
@@ -717,6 +721,7 @@ static const char *const errstr[] = {
 	[FI_ECRC - FI_ERRNO_OFFSET] = "CRC error",
 	[FI_ETRUNC - FI_ERRNO_OFFSET] = "Truncation error",
 	[FI_ENOKEY - FI_ERRNO_OFFSET] = "Required key not available",
+	[FI_ENOAV - FI_ERRNO_OFFSET] = "Missing or unavailable address vector",
 };
 
 __attribute__((visibility ("default")))

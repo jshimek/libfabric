@@ -211,7 +211,7 @@ static int rxd_ep_set_conn_id(struct rxd_ep *ep)
 int rxd_ep_enable(struct rxd_ep *ep)
 {
 	ssize_t i, ret;
-	struct fid_mr *mr = NULL;
+	void *mr = NULL;
 	struct rxd_rx_buf *rx_buf;
 
 	ret = fi_enable(ep->dg_ep);
@@ -226,7 +226,7 @@ int rxd_ep_enable(struct rxd_ep *ep)
 	ep->credits = ep->rx_size;
 	for (i = 0; i < ep->rx_size; i++) {
 		rx_buf = ep->do_local_mr ?
-			util_buf_get_ex(ep->rx_pkt_pool, (void **)&mr) :
+			util_buf_get_ex(ep->rx_pkt_pool, &mr) :
 			util_buf_get(ep->rx_pkt_pool);
 
 		if (!rx_buf) {
@@ -234,7 +234,7 @@ int rxd_ep_enable(struct rxd_ep *ep)
 			goto out;
 		}
 
-		rx_buf->mr = mr;
+		rx_buf->mr = (struct fid_mr *) mr;
 		rx_buf->ep = ep;
 		ret = rxd_ep_repost_buff(rx_buf);
 		if (ret)
@@ -348,10 +348,10 @@ uint64_t rxd_ep_copy_iov_buf(const struct iovec *iov, size_t iov_count,
 struct rxd_pkt_meta *rxd_tx_pkt_acquire(struct rxd_ep *ep)
 {
 	struct rxd_pkt_meta *pkt_meta;
-	struct fid_mr *mr = NULL;
+	void *mr = NULL;
 
 	pkt_meta = ep->do_local_mr ?
-		util_buf_alloc_ex(ep->tx_pkt_pool, (void **)&mr) :
+		util_buf_alloc_ex(ep->tx_pkt_pool, &mr) :
 		util_buf_alloc(ep->tx_pkt_pool);
 
 	if (!pkt_meta) {
@@ -362,7 +362,7 @@ struct rxd_pkt_meta *rxd_tx_pkt_acquire(struct rxd_ep *ep)
 	FI_DBG(&rxd_prov, FI_LOG_EP_CTRL, "Acquired tx pkt: %p\n", pkt_meta);
 	pkt_meta->ep = ep;
 	pkt_meta->retries = 0;
-	pkt_meta->mr = mr;
+	pkt_meta->mr = (struct fid_mr *) mr;
 	pkt_meta->ref = 0;
 	return pkt_meta;
 }
@@ -543,7 +543,8 @@ void rxd_resend_pkt(struct rxd_ep *ep, struct rxd_tx_entry *tx_entry,
 
 			if (curr_stamp < pkt->us_stamp ||
 			    (curr_stamp - pkt->us_stamp) <
-			    (1 << ((uint64_t) pkt->retries + 1)) * RXD_RETRY_TIMEOUT) {
+			    (((uint64_t) 1) << ((uint64_t) pkt->retries + 1)) *
+			     RXD_RETRY_TIMEOUT) {
 				break;
 			}
 
@@ -774,7 +775,7 @@ void rxd_ep_init_start_hdr(struct rxd_ep *ep, struct rxd_peer *peer,
 		*data_sz = MIN(RXD_MAX_STRT_DATA_PKT_SZ(ep), *msg_sz);
 
 		rxd_init_op_hdr(&pkt->op, 0, *msg_sz, 0, op, 0, flags);
-		pkt->op.peer_id = tx_entry->read_rsp.peer_msg_id;
+		pkt->op.remote_idx = tx_entry->read_rsp.peer_msg_id;
 
 		tx_entry->done = rxd_ep_copy_iov_buf(tx_entry->read_rsp.src_iov,
 						     tx_entry->read_rsp.iov_count,
@@ -1887,9 +1888,14 @@ void rxd_ep_progress(struct rxd_ep *ep)
 
 		dlist_foreach(&tx_entry->pkt_list, pkt_item) {
 			pkt = container_of(pkt_item, struct rxd_pkt_meta, entry);
+			/* TODO: This if check is repeated.  Create a function
+			 * to perform this check, and figure out what the check
+			 * is actually doing with the bit-shift, multiply operation.
+			 */
 			if (curr_stamp > pkt->us_stamp &&
 			    curr_stamp - pkt->us_stamp >
-			    (1 << ((uint64_t) pkt->retries + 1)) * RXD_RETRY_TIMEOUT) {
+			    (((uint64_t) 1) << ((uint64_t) pkt->retries + 1)) *
+			     RXD_RETRY_TIMEOUT) {
 				pkt->us_stamp = curr_stamp;
 				rxd_ep_retry_pkt(ep, tx_entry, pkt);
 			}

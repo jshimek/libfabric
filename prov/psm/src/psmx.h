@@ -293,6 +293,16 @@ struct psmx_fid_domain {
 	pthread_t		progress_thread;
 };
 
+#define PSMX_DEFAULT_UNIT	(-1)
+#define PSMX_DEFAULT_PORT	0
+#define PSMX_DEFAULT_SERVICE	0
+
+struct psmx_src_name {
+	int	unit;		/* start from 0. -1 means any */
+	int	port;		/* start from 1. 0 means any */
+	int	service;	/* 0 means any */
+};
+
 struct psmx_cq_event {
 	union {
 		struct fi_cq_entry		context;
@@ -451,7 +461,10 @@ struct psmx_trigger {
 };
 
 struct psmx_fid_cntr {
-	struct fid_cntr		cntr;
+	union {
+		struct fid_cntr		cntr;
+		struct util_cntr	util_cntr; /* for util_poll_run */
+	};
 	struct psmx_fid_domain	*domain;
 	int			events;
 	uint64_t		flags;

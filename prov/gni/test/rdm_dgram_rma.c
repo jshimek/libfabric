@@ -109,7 +109,7 @@ void common_setup(void)
 	hints->mode = ~0;
 	hints->caps |= GNIX_EP_RDM_PRIMARY_CAPS;
 
-	hints->fabric_attr->name = strdup("gni");
+	hints->fabric_attr->prov_name = strdup("gni");
 
 	ret = fi_getinfo(FI_VERSION(1, 0), NULL, 0, 0, hints, &fi);
 	cr_assert(!ret, "fi_getinfo");
@@ -123,6 +123,7 @@ void common_setup(void)
 	ret = fi_open_ops(&dom[0]->fid, FI_GNI_DOMAIN_OPS_1,
 			  0, (void **) gni_domain_ops, NULL);
 
+	memset(&attr, 0, sizeof(attr));
 	attr.type = FI_AV_MAP;
 	attr.count = 2;
 
