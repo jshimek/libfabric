@@ -158,11 +158,6 @@ static int verify_cq_attr(struct fi_cq_attr *attr, struct fi_ops_cq *ops,
 		return -FI_EINVAL;
 	}
 
-	/* TODO: Wait objects are not yet implemented. */
-	if (attr->wait_obj != FI_WAIT_NONE) {
-		return -FI_ENOSYS;
-	}
-
 	switch (attr->wait_obj) {
 	case FI_WAIT_NONE:
 		ops->sread = fi_no_cq_sread;
@@ -529,41 +524,51 @@ DIRECT_FN STATIC ssize_t gnix_cq_readfrom(struct fid_cq *cq, void *buf,
 	return read_count ?: -FI_EAGAIN;
 }
 
-DIRECT_FN STATIC ssize_t gnix_cq_read(struct fid_cq *cq, void *buf, size_t count)
-{
-	return gnix_cq_readfrom(cq, buf, count, NULL);
-}
-
 DIRECT_FN STATIC ssize_t gnix_cq_sreadfrom(struct fid_cq *cq, void *buf,
 					   size_t count, fi_addr_t *src_addr,
 					   const void *cond, int timeout)
 {
+	struct gnix_fid_cq *cq_priv;
 	double start_ms = 0.0, end_ms = 0.0;
 	int ret;
 
-	ret = gnix_cq_readfrom(cq, buf, count, NULL);
-	if (ret != -FI_EAGAIN)
-		return ret;
+	cq_priv = container_of(cq, struct gnix_fid_cq, cq_fid);
 
-	if (timeout > 0)
-		start_ms = fi_gettime_ms();
-
-	do {
-		usleep(1000);
-
-		ret = gnix_cq_readfrom(cq, buf, count, NULL);
+	if (cq_priv->wait) {
+		fi_wait((struct fid_wait *)cq_priv->wait, timeout);
+	} else {
+		ret = gnix_cq_readfrom(cq, buf, count, src_addr);
 		if (ret != -FI_EAGAIN)
 			return ret;
 
-		if (timeout > 0) {
-			end_ms = fi_gettime_ms();
-			timeout -=  (end_ms - start_ms);
-			timeout = timeout < 0 ? 0 : timeout;
-			start_ms = end_ms;
-		}
-	} while (timeout);
+		if (timeout > 0)
+			start_ms = fi_gettime_ms();
 
-	return -FI_EAGAIN;
+		do {
+			usleep(1000);
+
+			ret = gnix_cq_readfrom(cq, buf, count, src_addr);
+			if (ret != -FI_EAGAIN)
+				return ret;
+
+			if (timeout > 0) {
+				end_ms = fi_gettime_ms();
+				timeout -=  (end_ms - start_ms);
+				timeout = timeout < 0 ? 0 : timeout;
+				start_ms = end_ms;
+			}
+		} while (timeout);
+		
+		return -FI_EAGAIN;
+	}
+
+	return gnix_cq_readfrom(cq, buf, count, src_addr);
+}
+
+DIRECT_FN STATIC ssize_t gnix_cq_read(struct fid_cq *cq, void *buf, size_t count)
+{
+	return gnix_cq_sreadfrom(cq, buf, count, NULL, NULL, 0);
+	
 }
 
 DIRECT_FN STATIC ssize_t gnix_cq_sread(struct fid_cq *cq, void *buf,
@@ -631,15 +636,9 @@ DIRECT_FN STATIC int gnix_cq_signal(struct fid_cq *cq)
 
 static int gnix_cq_control(struct fid *cq, int command, void *arg)
 {
-	/* disabled until new trywait interface is implemented
-	struct gnix_fid_cq *cq_priv;
-
-	cq_priv = container_of(cq, struct gnix_fid_cq, cq_fid);
-	*/
 
 	switch (command) {
 	case FI_GETWAIT:
-		/* return _gnix_get_wait_obj(cq_priv->wait, arg); */
 		return -FI_ENOSYS;
 	default:
 		return -FI_EINVAL;

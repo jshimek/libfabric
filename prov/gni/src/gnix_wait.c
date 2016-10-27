@@ -456,8 +456,6 @@ DIRECT_FN int gnix_wait_wait(struct fid_wait *wait, int timeout)
 {
 	int err = 0, ret;
 	char c;
-//	GNIX_WARN(WAIT_SUB,
-//			"Not Implemented at all as of yet.\n");
 	struct gnix_fid_wait *wait_priv;
 	struct gnix_fid_fabric *fabric; 
 	GNIX_TRACE(WAIT_SUB, "\n");
@@ -472,7 +470,7 @@ DIRECT_FN int gnix_wait_wait(struct fid_wait *wait, int timeout)
 
 	switch (wait_priv->type) {
 	case FI_WAIT_UNSPEC:
-		GNIX_TRACE(WAIT_SUB, "Calling fi_poll_fd %d\n", wait_priv->fd[WAIT_READ]);
+		GNIX_TRACE(WAIT_SUB, "Calling fi_poll_fd %d timeout %d\n", wait_priv->fd[WAIT_READ], timeout);
 		err = fi_poll_fd(wait_priv->fd[WAIT_READ], timeout);
 		GNIX_TRACE(WAIT_SUB, "Return code from poll was %d\n", err);
 		if (err == 0) {
