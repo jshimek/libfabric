@@ -141,10 +141,15 @@ try_again:
 	// We need to go to sleep here and only wake up if in AUTO_PROGRESS
 	// or our we are in a fi_wait function
 
-	status = GNI_CqVectorMonitor(cqv,
+/*	status = GNI_CqVectorMonitor(cqv,
 				     2,
 				     -1,
 				     &which);
+*/
+
+	usleep(2000);
+	status = GNI_RC_SUCCESS;
+	which = 1;
 
 	switch (status) {
 	case GNI_RC_SUCCESS:
