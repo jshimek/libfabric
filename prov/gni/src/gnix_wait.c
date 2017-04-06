@@ -383,6 +383,9 @@ static int gnix_init_wait_obj(struct gnix_fid_wait *wait, enum fi_wait_obj type)
 		if (fi_fd_nonblock(wait->fd[WAIT_READ]))
 			goto cleanup;
 
+		if (fi_fd_nonblock(wait->fd[WAIT_WRITE]))
+			goto cleanup;
+
 		break;
 	default:
 		GNIX_WARN(WAIT_SUB, "Invalid wait type: %d\n",
